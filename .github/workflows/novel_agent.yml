@@ -26,13 +26,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller==5.13.0
           pip install -r requirements.txt
-          pyinstaller --onefile --name qm-app main.py
+          pyinstaller --onefile --name qm-app-win main.py
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist/qm-app.exe
+          path: dist/qm-app-win.exe
 
   build-macos:
     runs-on: macos-latest
@@ -50,13 +50,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller==5.13.0
           pip install -r requirements.txt
-          pyinstaller --onefile --name qm-app main.py
+          pyinstaller --onefile --name qm-app-macos main.py
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-build
-          path: dist/qm-app
+          path: dist/qm-app-macos
 
   build-linux:
     runs-on: ubuntu-latest
@@ -74,13 +74,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller==5.13.0
           pip install -r requirements.txt
-          pyinstaller --onefile --name qm-app main.py
+          pyinstaller --onefile --name qm-app-linux main.py
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: dist/qm-app
+          path: dist/qm-app-linux
 
   release:
     needs: [build-windows, build-macos, build-linux]
@@ -96,15 +96,15 @@ jobs:
           merge-multiple: false
       
       - name: Add Execute Permission
-        run: chmod +x artifacts/*/qm-app
+        run: chmod +x artifacts/macos-build/qm-app-macos artifacts/linux-build/qm-app-linux
       
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/windows-build/qm-app.exe
-            artifacts/macos-build/qm-app
-            artifacts/linux-build/qm-app
+            artifacts/windows-build/qm-app-win.exe
+            artifacts/macos-build/qm-app-macos
+            artifacts/linux-build/qm-app-linux
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
