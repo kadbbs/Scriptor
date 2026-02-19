@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
@@ -15,17 +19,20 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
       
       - name: Install & Build
         run: |
-          pip install pyinstaller -r requirements.txt
-          pyinstaller --onefile --windowed src/main.py
+          python -m pip install --upgrade pip
+          pip install pyinstaller==5.13.0
+          pip install -r requirements.txt
+          pyinstaller --onefile --name qm-app main.py
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist/*.exe
+          path: dist/qm-app.exe
 
   build-macos:
     runs-on: macos-latest
@@ -36,17 +43,20 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
       
       - name: Install & Build
         run: |
-          pip install pyinstaller -r requirements.txt
-          pyinstaller --onefile --windowed src/main.py
+          python -m pip install --upgrade pip
+          pip install pyinstaller==5.13.0
+          pip install -r requirements.txt
+          pyinstaller --onefile --name qm-app main.py
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-build
-          path: dist/*.app
+          path: dist/qm-app
 
   build-linux:
     runs-on: ubuntu-latest
@@ -57,33 +67,44 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
       
       - name: Install & Build
         run: |
-          pip install pyinstaller -r requirements.txt
-          pyinstaller --onefile --windowed src/main.py
+          python -m pip install --upgrade pip
+          pip install pyinstaller==5.13.0
+          pip install -r requirements.txt
+          pyinstaller --onefile --name qm-app main.py
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: dist/*
+          path: dist/qm-app
 
   release:
     needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
     steps:
-      - uses: actions/checkout@v5
-      
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: '*-build'
+          merge-multiple: false
+      
+      - name: Add Execute Permission
+        run: chmod +x artifacts/*/qm-app
       
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/windows-build/qm-app.exe
+            artifacts/macos-build/qm-app
+            artifacts/linux-build/qm-app
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
