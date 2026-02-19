@@ -223,3 +223,83 @@ class BookInitializer:
         chapter_index = {"book_id": story_state["book_id"], "total_chapters": 0, "chapters": []}
         with open(f"{base_dir}/chapters/chapter_index.json", 'w', encoding='utf-8') as f:
             json.dump(chapter_index, f, ensure_ascii=False, indent=2)
+    
+
+
+    def generate_more_outlines(self, book_id: str, start_chapter: int, count: int = 20) -> List[Dict]:
+        """动态生成更多章节大纲"""
+        base_dir = f"books/{book_id}"
+        
+        # 加载现有数据
+        with open(f"{base_dir}/configs/world.json", 'r', encoding='utf-8') as f:
+            world = json.load(f)
+        with open(f"{base_dir}/configs/book_input.json", 'r', encoding='utf-8') as f:
+            book_input = json.load(f)
+        with open(f"{base_dir}/configs/outlines.json", 'r', encoding='utf-8') as f:
+            existing = json.load(f)
+        
+        # 获取已写章节摘要（用于上下文）
+        summaries = []
+        for i in range(max(1, start_chapter-5), start_chapter):
+            summary_file = f"{base_dir}/summaries/chapter_{i:03d}_summary.json"
+            if os.path.exists(summary_file):
+                with open(summary_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    summaries.append(f"第{i}章：{data.get('summary', '')}")
+        
+        prompt = f"""根据以下信息生成第{start_chapter}章到第{start_chapter+count-1}章的详细大纲：
+
+    【书籍信息】
+    - 类型：{book_input["genre"]}
+    - 主角核心：{book_input["protagonist_core"]}
+    - 初始目标：{book_input["initial_goal"]}
+
+    【世界设定】
+    {json.dumps(world, ensure_ascii=False, indent=2)}
+
+    【前情摘要】
+    {chr(10).join(summaries)}
+
+    请生成 JSON 格式的章节大纲列表（{count}章）：
+    {{
+        "outlines": [
+            {{
+                "chapter_number": {start_chapter},
+                "title": "章节标题",
+                "main_plot": "主要情节",
+                "sub_plot": "次要情节",
+                "key_characters": ["角色名"],
+                "climax": "本章高潮",
+                "hook": "悬念钩子",
+                "word_count_target": 3000
+            }}
+        ]
+    }}
+
+    只返回 JSON，不要其他内容。"""
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=300
+        )
+        
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
+        data = json.loads(content)
+        new_outlines = data.get("outlines", []) if isinstance(data, dict) else data
+        
+        # 合并到现有大纲
+        existing.extend(new_outlines)
+        
+        # 保存
+        with open(f"{base_dir}/configs/outlines.json", 'w', encoding='utf-8') as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+        
+        print(f"✅ 已生成 {len(new_outlines)} 章新大纲（第{start_chapter}-{start_chapter+count-1}章）")
+        return new_outlines

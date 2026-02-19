@@ -202,6 +202,21 @@ def read_chapter(book_id: str, chapter_num: int):
     print(content)
     print("=" * 60)
 
+def generate_outlines(book_id: str, start: int, count: int):
+    """生成更多大纲"""
+    if not check_env():
+        return
+    
+    api_key = os.getenv("DASHSCOPE_API_KEY")
+    base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    
+    if not os.path.exists(f"books/{book_id}"):
+        print(f"❌ 错误：书籍 {book_id} 不存在")
+        return
+    
+    initializer = BookInitializer(api_key, base_url)
+    initializer.generate_more_outlines(book_id, start, count)
+
 
 def show_menu():
     """显示主菜单"""
@@ -211,10 +226,11 @@ def show_menu():
     print()
     print("  1. 创建新书")
     print("  2. 撰写章节")
-    print("  3. 列出书籍")
-    print("  4. 查看章节列表")
-    print("  5. 阅读章节")
-    print("  6. 退出")
+    print("  3. 生成更多大纲")
+    print("  4. 列出书籍")
+    print("  5. 查看章节列表")
+    print("  6. 阅读章节")
+    print("  7. 退出")
     print()
 
 
@@ -222,7 +238,7 @@ def main():
     """主函数"""
     while True:
         show_menu()
-        choice = input("请选择操作 (1-6): ").strip()
+        choice = input("请选择操作 (1-7): ").strip()
         
         if choice == "1":
             init_new_book()
@@ -234,17 +250,25 @@ def main():
             else:
                 print("❌ 输入无效")
         elif choice == "3":
-            list_books()
+            book_id = input("输入书籍 ID: ").strip()
+            start = input("起始章节：").strip()
+            count = input("生成数量：").strip()
+            if book_id and start.isdigit() and count.isdigit():
+                generate_outlines(book_id, int(start), int(count))
+            else:
+                print("❌ 输入无效")
         elif choice == "4":
+            list_books()
+        elif choice == "5":
             book_id = input("输入书籍 ID: ").strip()
             if book_id:
                 list_chapters(book_id)
-        elif choice == "5":
+        elif choice == "6":
             book_id = input("输入书籍 ID: ").strip()
             chapter_num = input("输入章节号：").strip()
             if book_id and chapter_num.isdigit():
                 read_chapter(book_id, int(chapter_num))
-        elif choice == "6":
+        elif choice == "7":
             print("\n👋 再见！")
             break
         else:
@@ -257,6 +281,8 @@ if __name__ == "__main__":
             init_new_book()
         elif sys.argv[1] == "write" and len(sys.argv) >= 4:
             write_chapter(sys.argv[2], int(sys.argv[3]))
+        elif sys.argv[1] == "outlines" and len(sys.argv) >= 5:
+            generate_outlines(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
         elif sys.argv[1] == "list":
             list_books()
         elif sys.argv[1] == "chapters" and len(sys.argv) >= 3:
@@ -264,6 +290,13 @@ if __name__ == "__main__":
         elif sys.argv[1] == "read" and len(sys.argv) >= 4:
             read_chapter(sys.argv[2], int(sys.argv[3]))
         else:
-            main()
+            print("用法:")
+            print("  python main.py init              - 创建新书")
+            print("  python main.py write <id> <章>   - 写单章")
+            print("  python main.py outlines <id> <起> <数> - 生成大纲")
+            print("  python main.py list              - 列书籍")
+            print("  python main.py chapters <id>     - 查章节")
+            print("  python main.py read <id> <章>    - 读章节")
+            print("  python main.py                   - 交互模式")
     else:
         main()
