@@ -303,3 +303,107 @@ class BookInitializer:
         
         print(f"✅ 已生成 {len(new_outlines)} 章新大纲（第{start_chapter}-{start_chapter+count-1}章）")
         return new_outlines
+
+
+    def generate_more_timeline(self, book_id: str, count: int = 30) -> List[Dict]:
+        """动态生成更多时间线事件"""
+        base_dir = f"books/{book_id}"
+        
+        if not os.path.exists(base_dir):
+            print(f"❌ 书籍目录不存在：{base_dir}")
+            return []
+        
+        print(f"\n📅 正在生成 {count} 个新时间线事件...")
+        
+        # 加载现有数据
+        with open(f"{base_dir}/configs/world.json", 'r', encoding='utf-8') as f:
+            world = json.load(f)
+        with open(f"{base_dir}/configs/book_input.json", 'r', encoding='utf-8') as f:
+            book_input = json.load(f)
+        with open(f"{base_dir}/configs/timeline.json", 'r', encoding='utf-8') as f:
+            existing = json.load(f)
+        with open(f"{base_dir}/configs/outlines.json", 'r', encoding='utf-8') as f:
+            outlines = json.load(f)
+        
+        # 获取时间线列表
+        existing_timeline = existing.get("timeline", [])
+        
+        # 获取已写章节摘要（用于上下文）
+        summaries = []
+        for i in range(max(1, len(outlines)-10), len(outlines)):
+            summary_file = f"{base_dir}/summaries/chapter_{i:03d}_summary.json"
+            if os.path.exists(summary_file):
+                with open(summary_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    summaries.append(f"第{i}章：{data.get('summary', '')}")
+        
+        # 获取现有时间线
+        last_event_time = existing_timeline[-1].get('time', '未知') if existing_timeline else '故事开始'
+        last_event = existing_timeline[-1].get('event', '未知') if existing_timeline else '无'
+        
+        prompt = f"""根据以下信息生成 {count} 个新的重大事件时间线：
+
+    【书籍信息】
+    - 类型：{book_input["genre"]}
+    - 主角核心：{book_input["protagonist_core"]}
+    - 金手指：{book_input["cheat_ability"]}
+    - 初始目标：{book_input["initial_goal"]}
+
+    【世界设定】
+    {json.dumps(world, ensure_ascii=False, indent=2)}
+
+    【现有时间线最后一个事件】
+    {last_event_time} - {last_event}
+
+    【当前剧情进度】
+    {chr(10).join(summaries) if summaries else '暂无'}
+
+    请生成 JSON 格式的时间线事件列表（{count}个），确保：
+    1. 时间承接上一个事件之后
+    2. 事件重要性分布合理（1-5 级）
+    3. 包含商业/情感/冲突/机遇等多种类型
+    4. 与当前剧情进度连贯
+
+    {{
+        "timeline": [
+            {{
+                "time": "2011 年 6 月",
+                "event": "事件描述",
+                "type": "商业/情感/冲突/机遇",
+                "importance": 1-5,
+                "related_characters": ["角色名"],
+                "related_arc": "关联剧情卷"
+            }}
+        ]
+    }}
+
+    只返回 JSON，不要其他内容。"""
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=300
+        )
+        
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
+        data = json.loads(content)
+        new_events = data.get('timeline', []) if isinstance(data, dict) else data
+        
+        # 合并到现有时间线
+        existing_timeline.extend(new_events)
+        existing["timeline"] = existing_timeline
+        
+        # 保存
+        with open(f"{base_dir}/configs/timeline.json", 'w', encoding='utf-8') as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+        
+        print(f"✅ 已生成 {len(new_events)} 个新时间线事件")
+        print(f"   总事件数：{len(existing_timeline)}个")
+        
+        return new_events
