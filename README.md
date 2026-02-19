@@ -21,8 +21,8 @@
 - [快速开始](#-快速开始)
 - [使用说明](#-使用说明)
 - [项目结构](#-项目结构)
-- [配置说明](#-配置说明)
-- [命令行工具](#-命令行工具)
+- [配置说明](#配置说明)
+- [命令行工具](#命令行工具)
 - [常见问题](#-常见问题)
 - [许可证](#-许可证)
 
@@ -45,68 +45,84 @@
 
 ### 1️⃣ 克隆项目
 
+```
 git clone https://github.com/your-username/novel-agent.git
 cd novel-agent
+```
 
 ### 2️⃣ 创建虚拟环境
 
-python -m venv myenv
+```python -m venv myenv
 source myenv/bin/activate
+```
 
 ### 3️⃣ 安装依赖
 
+```
 pip install -r requirements.txt
-
+```
 ### 4️⃣ 配置 API 密钥
 
+```
 export DASHSCOPE_API_KEY="sk-xxxxxxxxxxxxxxxx"
-
+```
 ### 5️⃣ 运行程序
 
+```
 python main.py init
-
+```
 ---
 
 ## 📖 使用说明
 
 ### 创建新书
 
+```
 python main.py init
-
+```
 ### 撰写章节
 
 写单章：
+```
 python main.py write book_20260219_140248 1
-
+```
 批量写第 1-10 章：
+```
 for i in {1..10}; do python main.py write book_20260219_140248 $i; done
-
+```
 ### 查看进度
 
 列出所有书籍：
+```
 python main.py list
-
+```
 查看某书章节列表：
+```
 python main.py chapters book_20260219_140248
-
+```
 阅读指定章节：
+```
 python main.py read book_20260219_140248 1
+```
 
 ---
 
 ### 拓展大纲和时间线
 
 生成 30 个新时间线事件:  
+```
 python main.py timeline book_20260219_140248 30  
+```
 
-或者同时生成大纲和时间线:   
-python main.py outlines book_20260219_140248 41 20  
-python main.py timeline book_20260219_140248 30  
-
+或者同时生成大纲和时间线:
+```   
+python main.py outlines book_20260219_140248 41 20    
+python main.py timeline book_20260219_140248 30    
+```
 ---
 
 ## 📁 项目结构
-
+```
 novel-agent/
 ├── core/                      # 核心模块
 │   ├── __init__.py           # 模块导出
@@ -132,10 +148,10 @@ novel-agent/
 ├── requirements.txt          # Python 依赖
 ├── main.py                   # 主入口
 └── README.md                 # 项目说明
-
+```
 ---
 
-## ⚙️ 配置说明
+## ⚙️ 配置说明 <a id="配置说明"></a>
 
 ### 环境变量
 
@@ -153,7 +169,7 @@ novel-agent/
 
 ---
 
-## 🛠️ 命令行工具
+## 🛠️  命令行工具<a id="命令行工具"></a>
 
 | 命令 | 说明 | 示例 |
 |:---|:---|:---|
@@ -162,6 +178,8 @@ novel-agent/
 | list | 列出书籍 | python main.py list |
 | chapters | 查看章节列表 | python main.py chapters <book_id> |
 | read | 阅读章节 | python main.py read <book_id> <chapter> |
+| timeline | 增加时间线 | python main.py timeline <book_id> <chapter> |
+| outlines | 增加大纲 | python main.py outlines <book_id> <chapter> |
 
 ---
 
