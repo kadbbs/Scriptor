@@ -16,6 +16,7 @@ class StoryStateManager:
         self.base_dir = f"books/{book_id}"
         self.state_file = f"{self.base_dir}/story_state.json"
         self.state = self._load_state()
+        self._ensure_defaults()
     
     def _load_state(self) -> Dict:
         """加载状态"""
@@ -23,6 +24,28 @@ class StoryStateManager:
             with open(self.state_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         return {}
+
+    def _ensure_defaults(self):
+        """确保 state 包含必要的默认键，避免 KeyError 和不一致"""
+        defaults = {
+            "book_id": self.book_id,
+            "current_chapter": 0,
+            "total_chapters": 0,
+            "total_words": 0,
+            "current_timeline_index": 0,
+            "active_characters": [],
+            "characters": [],
+            "events_done": [],
+            "active_plotlines": [],
+            "last_summary": "",
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "status": "initialized"
+        }
+
+        for k, v in defaults.items():
+            if k not in self.state:
+                self.state[k] = v
     
     def save_state(self):
         """保存状态"""
@@ -34,8 +57,85 @@ class StoryStateManager:
         """更新章节信息"""
         self.state["current_chapter"] = chapter_num
         self.state["total_chapters"] = chapter_num
-        self.state["total_words"] += word_count
+        # 安全地累加字数
+        self.state.setdefault("total_words", 0)
+        try:
+            self.state["total_words"] += int(word_count)
+        except Exception:
+            # 若 word_count 是字符串或异常，尝试用长度作为备用
+            self.state["total_words"] += len(str(word_count))
         self.state["last_summary"] = summary
+        self.save_state()
+
+    def get_character(self, name: str) -> Optional[Dict]:
+        """按名字查找角色信息"""
+        for c in self.state.get("characters", []):
+            if c.get("name") == name:
+                return c
+        return None
+
+    def update_character(self, char: Dict):
+        """更新或添加一个角色（根据 name 合并）"""
+        if "name" not in char:
+            return
+        chars = self.state.setdefault("characters", [])
+        for i, c in enumerate(chars):
+            if c.get("name") == char.get("name"):
+                # 合并字段（覆盖已有字段）
+                c.update(char)
+                chars[i] = c
+                self.save_state()
+                return
+
+        chars.append(char)
+        self.save_state()
+
+    def mark_events_done(self, events: List[str]):
+        """将事件标记为已完成（去重）"""
+        done = set(self.state.setdefault("events_done", []))
+        for e in events:
+            if e:
+                done.add(e)
+        self.state["events_done"] = list(done)
+        self.save_state()
+
+    def apply_state_delta(self, delta: Dict):
+        """应用从章节中抽取的状态增量。
+
+        delta 可能包含：characters (list of dict), events_done (list of str),
+        current_timeline_index (int), active_plotlines (list)
+        """
+        if not isinstance(delta, dict):
+            return
+
+        # 合并角色信息
+        for c in delta.get("characters", []):
+            try:
+                self.update_character(c)
+            except Exception:
+                continue
+
+        # 合并已完成事件
+        events = delta.get("events_done", [])
+        if events:
+            self.mark_events_done(events)
+
+        # 更新时间线索引
+        if isinstance(delta.get("current_timeline_index"), int):
+            self.state["current_timeline_index"] = max(
+                self.state.get("current_timeline_index", 0), delta.get("current_timeline_index")
+            )
+
+        # 合并活动剧情线
+        ap = delta.get("active_plotlines", [])
+        if ap:
+            exist = set(self.state.setdefault("active_plotlines", []))
+            for a in ap:
+                exist.add(a)
+            self.state["active_plotlines"] = list(exist)
+
+        # 更新最后更新时间
+        self.state["updated_at"] = datetime.now().isoformat()
         self.save_state()
     
     def get_state(self) -> Dict:

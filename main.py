@@ -121,15 +121,26 @@ def write_chapter(book_id: str, chapter_num: int):
     print(f"摘要：{summary[:100]}...")
     
     state_manager.save_summary(chapter_num, summary)
-    
+
+    # 从章节内容抽取结构化的状态增量并应用
+    try:
+        delta = generator.generate_state_delta(chapter_num, content)
+        if delta:
+            print("\n🔧 检测到状态增量，正在合并到故事状态...")
+            state_manager.apply_state_delta(delta)
+        else:
+            print("\n⚠️ 未检测到结构化状态增量")
+    except Exception as e:
+        print(f"\n⚠️ 抽取/合并状态增量失败：{e}")
+
     state_manager.update_chapter_index(
-        chapter_num, 
-        outline['title'], 
-        len(content), 
+        chapter_num,
+        outline['title'],
+        len(content),
         f"{chapter_dir}/chapter.txt",
         summary
     )
-    
+
     state_manager.update_chapter(chapter_num, len(content), summary)
     
     print(f"\n✅ 第{chapter_num}章完成！")

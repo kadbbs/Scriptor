@@ -142,3 +142,45 @@ class ChapterGenerator:
         )
         
         return response.choices[0].message.content.strip()
+
+    def generate_state_delta(self, chapter_num: int, content: str) -> Dict:
+        """从章节文本中抽取结构化的状态增量（JSON）。
+
+        返回格式示例：
+        {
+            "characters": [{"name":"苏哲","level":3,"role":"主角","last_seen_chapter":11,"notes":"……"}],
+            "events_done": ["苏哲揭露深蓝科技"],
+            "current_timeline_index": 5,
+            "active_plotlines": ["深蓝与雷霆的博弈"]
+        }
+        """
+        prompt = f"""请你作为剧情梳理助手，把下面的章节内容解析为结构化的 JSON 增量，包含：
+
+1) characters: 角色列表（每项包含 name, role, level(可选数字), last_seen_chapter(可选), notes(可选)）
+2) events_done: 本章完成的重要事件（简短描述字符串数组）
+3) current_timeline_index: 若章节推动了时间线，返回新的时间线索引（否则可不返回）
+4) active_plotlines: 本章影响或激活的剧情线标签数组
+
+只返回纯 JSON，不要任何额外说明。章节内容如下：
+
+{content[:4000]}
+"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=False
+            )
+
+            content = response.choices[0].message.content.strip()
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.endswith("```"):
+                content = content[:-3]
+            content = content.strip()
+
+            return json.loads(content)
+        except Exception:
+            # 若解析失败，返回空增量
+            return {}
