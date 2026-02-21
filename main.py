@@ -58,8 +58,30 @@ def write_chapter(book_id: str, chapter_num: int):
 
     outline = state_manager.get_outline(chapter_num)
     if not outline:
-        print(f"❌ 第{chapter_num}章没有大纲，无法撰写。请先生成/扩展大纲（outlines）。")
-        return
+        print(f"❌ 第{chapter_num}章没有大纲，自动生成直到达成当前阶段目标的大纲...")
+        # 自动生成从当前章节开始的大纲，由模型决定需要多少章达成目标
+        start_chapter = chapter_num
+        
+        initializer = BookInitializer(API_KEY, BASE_URL, MODEL_NAME)
+        try:
+            # 使用 count=0 让模型自行判断需要多少章以实现当前阶段目标
+            initializer.generate_more_outlines(book_id, start_chapter, 0)
+            print(f"✅ 已生成新大纲（从第{start_chapter}章开始，由模型决定章节数量以达成目标）")
+            
+            # 重新获取大纲
+            outline = state_manager.get_outline(chapter_num)
+            if not outline:
+                print(f"⚠️ 大纲生成后仍未找到第{chapter_num}章大纲")
+                return
+            
+            # 同时生成对应的时间线事件
+            print("📅 正在生成对应的时间线事件...")
+            initializer.generate_more_timeline(book_id, 0)
+            
+        except Exception as e:
+            print(f"⚠️ 自动生成大纲失败：{e}")
+            return
+    
     generator = ChapterGenerator(API_KEY, BASE_URL, book_id, MODEL_NAME)
 
     print(f"开始生成第{chapter_num}章：{outline.get('title')}")

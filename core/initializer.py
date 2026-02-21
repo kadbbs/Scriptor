@@ -353,7 +353,12 @@ class BookInitializer:
         with open(f"{base_dir}/configs/outlines.json", 'w', encoding='utf-8') as f:
             json.dump(existing, f, ensure_ascii=False, indent=2)
         
-        print(f"✅ 已生成 {len(new_outlines)} 章新大纲（第{start_chapter}-{start_chapter+count-1}章）")
+        # 改进的打印逻辑，处理 count <= 0 的情况
+        if count and count > 0:
+            print(f"✅ 已生成 {len(new_outlines)} 章新大纲（第{start_chapter}-{start_chapter+count-1}章）")
+        else:
+            print(f"✅ 已生成 {len(new_outlines)} 章新大纲（从第{start_chapter}章开始，由模型判断实现目标所需）")
+        
         return new_outlines
 
 
