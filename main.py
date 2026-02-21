@@ -1,250 +1,382 @@
-"""
-小说 Agent 主入口
-"""
-
 import os
 import sys
 import json
-from dotenv import load_dotenv
+from typing import Optional
+
 from core.initializer import BookInitializer
-from core.state import StoryStateManager
 from core.generator import ChapterGenerator
+from core.state import StoryStateManager
 
-load_dotenv()
+# API 配置 - 可通过环境变量覆盖
+API_KEY = os.getenv("DEEPSEEK_API_KEY")
+BASE_URL = "https://api.deepseek.com/v1"
+MODEL_NAME = os.getenv("NOVEL_MODEL", "deepseek-reasoner")
 
 
-def check_env():
-    """检查环境变量"""
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        print("❌ 错误：未找到 DASHSCOPE_API_KEY 环境变量")
-        print("   请编辑 .env 文件，填入你的 API 密钥")
+def check_env() -> bool:
+    if not API_KEY:
+        print("❌ 环境变量 API_KEY 未设置")
         return False
     return True
 
 
 def init_new_book():
-    """初始化新书"""
     if not check_env():
-        return None
-    
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    
-    print("\n📝 新书配置")
-    print("=" * 50)
-    
-    genre = input("类型 (都市重生/修仙重生/科技重生): ").strip() or "都市重生"
-    protagonist = input("主角核心设定：").strip() or "重生回 2010 年，掌握未来十年互联网风口"
-    cheat = input("金手指：").strip() or "精准记忆未来重大商业事件"
-    goal = input("初始目标：").strip() or "3 年内资产过亿"
-    setting = input("第一阶段地图：").strip() or "三线城市创业起步"
-    
+        return
+
+    print("请输入新书信息（回车使用默认或留空）：")
+    genre = input("类型（如：奇幻/都市/科幻）: ").strip() or "都市"
+    protagonist = input("主角核心设定: ").strip() or "主角是个普通人"
+    cheat = input("金手指设定（如有）: ").strip() or "无"
+    initial_goal = input("初始目标（如：吞噬3个物体）: ").strip() or "完成第一阶段目标"
+    first_stage_setting = input("第一阶段地图（如：出租屋）: ").strip() or "出租屋"
+
     book_input = {
         "genre": genre,
         "protagonist_core": protagonist,
         "cheat_ability": cheat,
-        "initial_goal": goal,
-        "first_stage_setting": setting
+        "initial_goal": initial_goal,
+        "first_stage_setting": first_stage_setting
     }
-    
-    print("\n" + "=" * 50)
-    print("确认配置：")
-    print(json.dumps(book_input, ensure_ascii=False, indent=2))
-    print("=" * 50)
-    
-    confirm = input("\n确认创建？(y/n): ").strip().lower()
-    if confirm != 'y':
-        print("❌ 已取消")
-        return None
-    
-    initializer = BookInitializer(api_key, base_url)
+
+    initializer = BookInitializer(API_KEY, BASE_URL, MODEL_NAME)
     story_state = initializer.init_new_book(book_input)
-    
-    print(f"\n✅ 书籍已创建：{story_state['book_id']}")
-    print(f"📁 存储位置：books/{story_state['book_id']}/")
-    
-    return story_state["book_id"]
+    print(f"新书已创建：{story_state.get('book_id')}")
 
 
 def write_chapter(book_id: str, chapter_num: int):
-    """撰写指定章节"""
     if not check_env():
         return
-    
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    
-    if not os.path.exists(f"books/{book_id}"):
-        print(f"❌ 错误：书籍 {book_id} 不存在")
-        return
-    
+
     state_manager = StoryStateManager(book_id)
-    generator = ChapterGenerator(api_key, base_url, book_id)
-    
-    if generator.chapter_exists(chapter_num):
-        print(f"⚠️  第{chapter_num}章已存在")
-        overwrite = input("是否覆盖？(y/n): ").strip().lower()
-        if overwrite != 'y':
-            print("❌ 已取消")
-            return
-    
-    world = state_manager.load_world()
-    outlines = state_manager.load_outlines()
-    state = state_manager.get_state()
-    
-    if chapter_num > len(outlines):
-        print(f"❌ 错误：只有{len(outlines)}章大纲")
+    # 加载所需内容
+    try:
+        world = state_manager.load_world()
+    except Exception:
+        print("❌ 无法加载 world.json，请确认书籍已初始化")
         return
+
+    outline = state_manager.get_outline(chapter_num)
+    if not outline:
+        print(f"❌ 第{chapter_num}章没有大纲，无法撰写。请先生成/扩展大纲（outlines）。")
+        return
+    generator = ChapterGenerator(API_KEY, BASE_URL, book_id, MODEL_NAME)
+
+    print(f"开始生成第{chapter_num}章：{outline.get('title')}")
     
-    outline = outlines[chapter_num - 1]
+    # 获取故事状态作为上下文
+    story_state = state_manager.get_state()
+    # 准备故事上下文
+    story_context = {
+        'characters': story_state.get('characters', []),
+        'events_done': story_state.get('events_done', []),
+        'active_plotlines': story_state.get('active_plotlines', [])
+    }
     
-    if chapter_num > 1:
-        summary = state_manager.load_recent_summaries(count=3)
-    else:
-        summary = ""
-    
-    print(f"\n📝 开始撰写第{chapter_num}章：{outline['title']}")
-    print("=" * 50)
-    
-    content = ""
-    for chunk in generator.generate_chapter_stream(chapter_num, outline, world, summary):
-        print(chunk, end="", flush=True)
-        content += chunk
-    
-    print("\n" + "=" * 50)
-    
-    chapter_dir = generator.save_chapter(chapter_num, content, outline['title'])
-    
-    print("\n📋 生成章节摘要...")
+    content = generator.generate_chapter(chapter_num, outline, world, 
+                                        state_manager.load_summary(chapter_num - 1) or "",
+                                        story_context)
+
+    chapter_dir = generator.save_chapter(chapter_num, content, outline.get('title', ''))
     summary = generator.generate_summary(chapter_num, content)
-    print(f"摘要：{summary[:100]}...")
-    
     state_manager.save_summary(chapter_num, summary)
 
-    # 从章节内容抽取结构化的状态增量并应用
+    # 从章节中抽取状态增量并合并
     try:
-        delta = generator.generate_state_delta(chapter_num, content)
-        if delta:
-            print("\n🔧 检测到状态增量，正在合并到故事状态...")
-            state_manager.apply_state_delta(delta)
-        else:
-            print("\n⚠️ 未检测到结构化状态增量")
+        delta = generator.generate_state_delta(chapter_num, content) or {}
+        state_manager.apply_state_delta(delta)
     except Exception as e:
-        print(f"\n⚠️ 抽取/合并状态增量失败：{e}")
+        print(f"⚠️ 抽取/合并状态增量失败：{e}")
+        delta = {}
 
+    # 使用 AI 判断是否完成第一阶段，将判定放在此处
+    try:
+        # 读取 book_input
+        bi_path = f"books/{book_id}/configs/book_input.json"
+        try:
+            with open(bi_path, 'r', encoding='utf-8') as f:
+                book_input = json.load(f)
+        except Exception:
+            book_input = {}
+
+        recent_summaries = state_manager.load_recent_summaries(count=5)
+        prompt = f"""你是剧情分析助手。给定以下信息，请判断书籍的第一阶段目标是否已被完成。
+
+要求：只返回纯 JSON，格式：
+{{"achieved": true/false, "confidence": 0.0-1.0, "evidence": "简短说明为何完成或未完成"}}
+
+上下文：
+- initial_goal: {book_input.get('initial_goal')}
+- first_stage_setting: {book_input.get('first_stage_setting')}
+- 故事状态 events_done: {state_manager.get_state().get('events_done', [])}
+- 最近摘要：{recent_summaries}
+- 本章抽取的增量 delta: {json.dumps(delta, ensure_ascii=False)}
+- 本章片段：{content[:2000]}
+
+请用中文判断并只输出 JSON。"""
+
+        try:
+            response = generator.client.chat.completions.create(
+                model=generator.model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=False
+            )
+            ai_out = response.choices[0].message.content.strip()
+            if ai_out.startswith('```'):
+                ai_out = ai_out.split('\n', 1)[-1]
+                if ai_out.endswith('```'):
+                    ai_out = ai_out[:-3].strip()
+
+            result = json.loads(ai_out)
+        except Exception:
+            result = {"achieved": False, "confidence": 0.0, "evidence": "AI 判定失败或返回不可解析内容"}
+
+        achieved = bool(result.get('achieved'))
+        current_stage = state_manager.get_state().get('stage', 1)
+
+        if achieved and current_stage == 1:
+            print("\n🎯 AI 判定第一阶段已完成：")
+            print("证据：", result.get('evidence', '无'))
+            confirm = input("要更新并设置第二阶段目标/地图吗？(y/n): ").strip().lower()
+            if confirm == 'y':
+                print("留空将保留原值。")
+                new_protagonist = input("主角核心设定（可选，留空则不变）：").strip()
+                new_goal = input("第二阶段目标：").strip()
+                new_setting = input("第二阶段地图：").strip()
+
+                if new_protagonist:
+                    book_input['protagonist_core'] = new_protagonist
+                    state_manager.state['protagonist_core'] = new_protagonist
+                if new_goal:
+                    book_input['second_stage_goal'] = new_goal
+                    state_manager.state['second_stage_goal'] = new_goal
+                if new_setting:
+                    book_input['second_stage_setting'] = new_setting
+
+                try:
+                    state_manager.state['stage'] = 2
+                    os.makedirs(f"books/{book_id}/configs", exist_ok=True)
+                    with open(f"books/{book_id}/configs/book_input.json", 'w', encoding='utf-8') as f:
+                        json.dump(book_input, f, ensure_ascii=False, indent=2)
+                    state_manager.save_state()
+                    print("✅ 已保存第二阶段设定并将故事阶段标记为 2")
+
+                    # 基于新设定重新规划后续大纲与时间线
+                    try:
+                        initializer = BookInitializer(API_KEY, BASE_URL, MODEL_NAME)
+                        start_ch = chapter_num + 1
+                        print(f"🔁 从第{start_ch}章开始重新生成后续大纲并由模型决定所需章节数量，随后生成时间线...")
+                        initializer.generate_more_outlines(book_id, start_ch, 0)
+                        initializer.generate_more_timeline(book_id, 0)
+                        print("✅ 大纲/时间线已根据新设定生成并保存")
+                    except Exception as e:
+                        print(f"⚠️ 重新生成大纲/时间线失败：{e}")
+
+                except Exception as e:
+                    print(f"⚠️ 保存第二阶段设定失败：{e}")
+            else:
+                print("ℹ️ 已选择不更新下一阶段设定")
+    except Exception as e:
+        print(f"⚠️ AI 阶段检测发生异常：{e}")
+
+    # 更新章节索引与状态
     state_manager.update_chapter_index(
         chapter_num,
-        outline['title'],
+        outline.get('title', f"第{chapter_num}章"),
         len(content),
         f"{chapter_dir}/chapter.txt",
         summary
     )
 
     state_manager.update_chapter(chapter_num, len(content), summary)
-    
+
     print(f"\n✅ 第{chapter_num}章完成！")
     print(f"   字数：{len(content)}")
     print(f"   位置：{chapter_dir}/")
-    
+
     return content
 
 
 def list_books():
-    """列出所有书籍"""
     if not os.path.exists("books"):
         print("📭 暂无书籍")
         return
-    
+
     print("\n📚 书籍列表")
     print("=" * 60)
-    
+
     for book_id in sorted(os.listdir("books")):
         state_file = f"books/{book_id}/story_state.json"
         if os.path.exists(state_file):
             with open(state_file, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            
+
             print(f"\n📖 {book_id}")
             print(f"   类型：{state.get('genre', '未知')}")
             print(f"   章节：{state.get('total_chapters', 0)}")
             print(f"   字数：{state.get('total_words', 0):,}")
             print(f"   状态：{state.get('status', '未知')}")
-    
+
     print("\n" + "=" * 60)
 
 
 def list_chapters(book_id: str):
-    """列出某书的所有章节"""
     index_file = f"books/{book_id}/chapters/chapter_index.json"
-    
+
     if not os.path.exists(index_file):
         print(f"❌ 书籍 {book_id} 不存在或无章节")
         return
-    
+
     with open(index_file, 'r', encoding='utf-8') as f:
         index = json.load(f)
-    
+
     print(f"\n📖 {book_id} - 章节列表")
     print("=" * 60)
-    
+
     for ch in index.get("chapters", []):
         print(f"   第{ch['chapter_number']:03d}章：{ch['title']}")
-        print(f"      字数：{ch['word_count']:,} | 创建：{ch['created_at'][:10]}")
-    
+        print(f"      字数：{ch['word_count']:,} | 创建：{ch.get('created_at','')[:10]}")
+
     print("=" * 60)
     print(f"总章节数：{index.get('total_chapters', 0)}")
 
 
 def read_chapter(book_id: str, chapter_num: int):
-    """阅读指定章节"""
     filepath = f"books/{book_id}/chapters/chapter_{chapter_num:03d}/chapter.txt"
-    
+
     if not os.path.exists(filepath):
         print(f"❌ 第{chapter_num}章不存在")
         return
-    
+
     print(f"\n📖 第{chapter_num}章")
     print("=" * 60)
-    
+
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
-    
+
     print(content)
     print("=" * 60)
 
+
 def generate_outlines(book_id: str, start: int, count: int):
-    """生成更多大纲"""
     if not check_env():
         return
-    
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    
+
     if not os.path.exists(f"books/{book_id}"):
         print(f"❌ 错误：书籍 {book_id} 不存在")
         return
-    
-    initializer = BookInitializer(api_key, base_url)
+
+    initializer = BookInitializer(API_KEY, BASE_URL, MODEL_NAME)
     initializer.generate_more_outlines(book_id, start, count)
 
+
 def generate_timeline(book_id: str, count: int):
-    """生成更多时间线"""
     if not check_env():
         return
-    
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    
+
     if not os.path.exists(f"books/{book_id}"):
         print(f"❌ 错误：书籍 {book_id} 不存在")
         return
-    
-    initializer = BookInitializer(api_key, base_url)
+
+    initializer = BookInitializer(API_KEY, BASE_URL, MODEL_NAME)
     initializer.generate_more_timeline(book_id, count)
 
+
+def update_stage_settings(book_id: str):
+    """交互式更新并保存书籍的阶段设定（可在任意时刻调用）"""
+    if not check_env():
+        return
+
+    state_manager = StoryStateManager(book_id)
+    bi_path = f"books/{book_id}/configs/book_input.json"
+    try:
+        with open(bi_path, 'r', encoding='utf-8') as f:
+            book_input = json.load(f)
+    except Exception:
+        book_input = {}
+
+    print("当前设定（留空则不修改）：")
+    print(f"  主角核心：{book_input.get('protagonist_core')}")
+    print(f"  初始目标：{book_input.get('initial_goal')}")
+    print(f"  第一阶段地图：{book_input.get('first_stage_setting')}")
+    print(f"  第二阶段目标（当前）：{book_input.get('second_stage_goal', '')}")
+
+    new_protagonist = input("主角核心设定（可选，留空则不变）：").strip()
+    new_goal = input("第二阶段目标（留空则不变）：").strip()
+    new_setting = input("第二阶段地图/场景（留空则不变）：").strip()
+    new_stage = input("设置阶段数（如 2，留空不变）：").strip()
+
+    if new_protagonist:
+        book_input['protagonist_core'] = new_protagonist
+        state_manager.state['protagonist_core'] = new_protagonist
+    if new_goal:
+        book_input['second_stage_goal'] = new_goal
+        state_manager.state['second_stage_goal'] = new_goal
+    if new_setting:
+        book_input['second_stage_setting'] = new_setting
+    if new_stage.isdigit():
+        state_manager.state['stage'] = int(new_stage)
+
+    try:
+        os.makedirs(f"books/{book_id}/configs", exist_ok=True)
+        with open(f"books/{book_id}/configs/book_input.json", 'w', encoding='utf-8') as f:
+            json.dump(book_input, f, ensure_ascii=False, indent=2)
+        state_manager.save_state()
+        print("✅ 已保存设定")
+    except Exception as e:
+        print(f"⚠️ 保存设定失败：{e}")
+
+    regen = input("是否基于新设定重新生成后续大纲/时间线？(y/n): ").strip().lower()
+    if regen == 'y':
+        try:
+            initializer = BookInitializer(API_KEY, BASE_URL, MODEL_NAME)
+            start_ch = state_manager.get_state().get('current_chapter', 0) + 1
+
+            max_retries = 5
+            attempt = 0
+            while True:
+                attempt += 1
+                print(f"🔁 第 {attempt} 次尝试生成大纲（模型决定数量）...")
+                initializer.generate_more_outlines(book_id, start_ch, 0)
+
+                # 检查大纲中是否有目标达成标注
+                outlines_path = f"books/{book_id}/configs/outlines.json"
+                try:
+                    with open(outlines_path, 'r', encoding='utf-8') as f:
+                        outlines = json.load(f)
+                except Exception:
+                    outlines = []
+
+                found = False
+                for o in outlines:
+                    notes = o.get('notes') if isinstance(o, dict) else None
+                    if isinstance(notes, str) and '目标达成' in notes:
+                        found = True
+                        break
+
+                if found:
+                    print("✅ 模型已在大纲中标注“目标达成”。")
+                    try:
+                        initializer.generate_more_timeline(book_id, 0)
+                    except Exception:
+                        pass
+                    break
+
+                if attempt >= max_retries:
+                    print(f"⚠️ 已达最大重试次数 ({max_retries})，仍未在大纲标注目标达成。")
+                    break
+
+                cont = input("模型生成的大纲未标注目标达成，是否重试一次？(y/n): ").strip().lower()
+                if cont != 'y':
+                    print("ℹ️ 停止重试。可稍后手动再次生成或编辑大纲以标注目标")
+                    break
+
+            print("✅ 大纲/时间线重生成流程结束")
+        except Exception as e:
+            print(f"⚠️ 重新生成失败：{e}")
+
+
 def show_menu():
-    """显示主菜单"""
     print("\n" + "=" * 60)
     print("📖 小说 Agent 系统 v2.0 (持久化版)")
     print("=" * 60)
@@ -258,15 +390,15 @@ def show_menu():
     print("  7. 查看章节列表")
     print("  8. 阅读章节")
     print("  9. 退出")
+    print(" 10. 更新阶段设定（随时修改目标/地图）")
     print()
 
 
 def main():
-    """主函数"""
     while True:
         show_menu()
         choice = input("请选择操作 (1-9): ").strip()
-        
+
         if choice == "1":
             init_new_book()
         elif choice == "2":
@@ -294,7 +426,21 @@ def main():
         elif choice == "5":
             book_id = input("输入书籍 ID: ").strip()
             if book_id:
-                show_status(book_id)
+                # 简单展示 story_state.json
+                sf = f"books/{book_id}/story_state.json"
+                if os.path.exists(sf):
+                    with open(sf, 'r', encoding='utf-8') as f:
+                        print(json.dumps(json.load(f), ensure_ascii=False, indent=2))
+                else:
+                    print("❌ 未找到 story_state.json")
+
+                # 允许随时更新阶段设定
+                try:
+                    ans = input("是否更新阶段设定/目标/地图？(y/n): ").strip().lower()
+                    if ans == 'y':
+                        update_stage_settings(book_id)
+                except Exception:
+                    pass
         elif choice == "6":
             list_books()
         elif choice == "7":
@@ -309,6 +455,10 @@ def main():
         elif choice == "9":
             print("\n👋 再见！")
             break
+        elif choice == "10":
+            book_id = input("输入书籍 ID: ").strip()
+            if book_id:
+                update_stage_settings(book_id)
         else:
             print("❌ 无效选项")
 
@@ -326,11 +476,18 @@ if __name__ == "__main__":
         elif sys.argv[1] == "list":
             list_books()
         elif sys.argv[1] == "status" and len(sys.argv) >= 3:
-            show_status(sys.argv[2])
+            sf = f"books/{sys.argv[2]}/story_state.json"
+            if os.path.exists(sf):
+                with open(sf, 'r', encoding='utf-8') as f:
+                    print(json.dumps(json.load(f), ensure_ascii=False, indent=2))
+            else:
+                print("❌ 未找到 story_state.json")
         elif sys.argv[1] == "chapters" and len(sys.argv) >= 3:
             list_chapters(sys.argv[2])
         elif sys.argv[1] == "read" and len(sys.argv) >= 4:
             read_chapter(sys.argv[2], int(sys.argv[3]))
+        elif sys.argv[1] == "setstage" and len(sys.argv) >= 3:
+            update_stage_settings(sys.argv[2])
         else:
             print("用法:")
             print("  python main.py init              - 创建新书")

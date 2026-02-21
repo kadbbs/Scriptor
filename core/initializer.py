@@ -12,9 +12,9 @@ from openai import OpenAI
 class BookInitializer:
     """新书初始化模块"""
     
-    def __init__(self, api_key: str, base_url: str):
+    def __init__(self, api_key: str, base_url: str, model_name: str = "qwen3.5-plus"):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
-        self.model = "qwen3.5-plus"
+        self.model = model_name
     
     def init_new_book(self, book_input: Dict) -> Dict:
         """开书初始化主流程"""
@@ -72,74 +72,76 @@ class BookInitializer:
             messages=[{"role": "user", "content": prompt}],
             timeout=60
         )
-        
+        # 清理并解析模型返回的 JSON
         content = response.choices[0].message.content.strip()
-        # 清理可能的 markdown 标记
         if content.startswith("```json"):
             content = content[7:]
         if content.endswith("```"):
             content = content[:-3]
         content = content.strip()
-        
-        return json.loads(content)
-    
+
+        try:
+            return json.loads(content)
+        except Exception:
+            return {}
+
     def _generate_timeline(self, book_input: Dict, world: Dict) -> Dict:
-        """生成时间线"""
-        prompt = f"""根据以下信息生成未来 3 年的重大事件时间线：
+        """生成时间线：模型返回一个 JSON 对象，包含 timeline 列表，
+        并可选包含 goal_achieved_at 字段指示在哪个事件上达成初始目标。
+        """
+        prompt = f"""请基于下列信息生成一组以实现初始目标为导向的时间线事件列表。
 
 【书籍信息】
-- 类型：{book_input["genre"]}
-- 主角核心：{book_input["protagonist_core"]}
-- 金手指：{book_input["cheat_ability"]}
-- 初始目标：{book_input["initial_goal"]}
+- 类型：{book_input.get('genre')}
+- 主角核心：{book_input.get('protagonist_core')}
+- 金手指：{book_input.get('cheat_ability')}
+- 初始目标：{book_input.get('initial_goal')}
 
 【世界设定】
 {json.dumps(world, ensure_ascii=False, indent=2)}
 
-请生成 JSON 格式的时间线，包含 20 个关键事件：
+要求：
+- 返回 JSON 格式，包含字段 `timeline`（事件数组），每个事件至少包含 `event`、`time`（可选）、`type`、`importance`（1-5）。
+- 如果模型判断可以在某一事件上实现初始目标，请在最外层返回字段 `goal_achieved_at`，其值为该事件在 `timeline` 中的索引（从0开始）或相应描述。
+- 不要返回额外说明或非 JSON 内容。
+
+                示例格式：
 {{
     "timeline": [
-        {{
-            "time": "2010 年 3 月",
-            "event": "事件描述",
-            "type": "商业/情感/冲突/机遇",
-            "importance": 1-5,
-            "related_characters": ["角色名"]
-        }}
-    ]
+        {{"event": "事件描述", "time": "第1年", "type": "冲突", "importance": 4, "related_characters": ["角色A"]}}
+    ],
+    "goal_achieved_at": 5
 }}
 
-只返回 JSON，不要任何其他内容。"""
-        
+只返回 JSON。"""
+
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             timeout=120
         )
-        
+
         content = response.choices[0].message.content.strip()
         if content.startswith("```json"):
             content = content[7:]
         if content.endswith("```"):
             content = content[:-3]
         content = content.strip()
-        
-        return json.loads(content)
+
+        try:
+            return json.loads(content)
+        except Exception:
+            return {}
     
     def _generate_outlines(self, book_input: Dict, world: Dict, timeline: Dict) -> List[Dict]:
         """生成前 20 章大纲"""
         prompt = f"""根据以下信息生成前 20 章的详细大纲：
 
 【书籍信息】
-- 类型：{book_input["genre"]}
-- 主角核心：{book_input["protagonist_core"]}
-- 初始目标：{book_input["initial_goal"]}
 
 【世界设定】
-{json.dumps(world, ensure_ascii=False, indent=2)}
 
 【时间线】
-{json.dumps(timeline, ensure_ascii=False, indent=2)}
 
 请生成 JSON 格式的章节大纲列表：
 {{
@@ -158,6 +160,31 @@ class BookInitializer:
 }}
 
 只返回 JSON，不要任何其他内容。"""
+        prompt = f"""根据以下信息，生成一组以实现初始目标为导向的章节大纲序列。
+
+说明：请基于 `initial_goal`、时间线与世界设定，设计一套章节大纲，覆盖从当前故事起点直到目标明确达成为止。请在返回数据中至少包含每章的：`chapter_number`（从 start 或 1 开始），`title`，`main_plot`，`sub_plot`，`key_characters`，`climax`，`hook`，`word_count_target`。
+
+在某一章明确达成初始目标时，请在该章的 `notes` 字段中标注“目标达成”。大纲数量由模型自行判断以自然实现目标，不必固定为 20 章。
+
+返回格式示例：
+{{
+  "outlines": [ {{"chapter_number":1, "title":"...", "main_plot":"...", "notes":"可选"}}, ... ],
+  "note": "可选：说明共生成多少章及在哪章达成目标"
+}}
+
+只返回 JSON，不要其他说明。
+
+【书籍信息】
+- 类型：{book_input["genre"]}
+- 主角核心：{book_input["protagonist_core"]}
+- 初始目标：{book_input["initial_goal"]}
+
+【世界设定】
+{json.dumps(world, ensure_ascii=False, indent=2)}
+
+【时间线】
+{json.dumps(timeline, ensure_ascii=False, indent=2)}
+"""
         
         response = self.client.chat.completions.create(
             model=self.model,
@@ -238,6 +265,21 @@ class BookInitializer:
         with open(f"{base_dir}/configs/outlines.json", 'r', encoding='utf-8') as f:
             existing = json.load(f)
         
+        # 加载故事状态以获取当前阶段
+        story_state_file = f"{base_dir}/story_state.json"
+        current_stage = 1
+        if os.path.exists(story_state_file):
+            with open(story_state_file, 'r', encoding='utf-8') as f:
+                story_state = json.load(f)
+                current_stage = story_state.get('stage', 1)
+        
+        # 根据当前阶段确定目标
+        current_goal = book_input.get('initial_goal', '')
+        if current_stage >= 2 and 'second_stage_goal' in book_input and book_input['second_stage_goal']:
+            current_goal = book_input['second_stage_goal']
+        elif current_stage >= 3 and 'third_stage_goal' in book_input and book_input['third_stage_goal']:
+            current_goal = book_input['third_stage_goal']
+        
         # 获取已写章节摘要（用于上下文）
         summaries = []
         for i in range(max(1, start_chapter-5), start_chapter):
@@ -247,12 +289,19 @@ class BookInitializer:
                     data = json.load(f)
                     summaries.append(f"第{i}章：{data.get('summary', '')}")
         
-        prompt = f"""根据以下信息生成第{start_chapter}章到第{start_chapter+count-1}章的详细大纲：
+        # 如果 count <= 0，允许模型自行判断需要多少章以实现当前阶段目标
+        if count and count > 0:
+            range_desc = f"第{start_chapter}章到第{start_chapter+count-1}章（共{count}章）"
+        else:
+            range_desc = f"从第{start_chapter}章开始，生成直到达成当前阶段目标所需的章节序列（模型自行判断章数）"
+
+        prompt = f"""根据以下信息生成{range_desc}的详细大纲：
 
     【书籍信息】
     - 类型：{book_input["genre"]}
     - 主角核心：{book_input["protagonist_core"]}
-    - 初始目标：{book_input["initial_goal"]}
+    - 当前阶段目标：{current_goal}
+    - 当前阶段：{current_stage}
 
     【世界设定】
     {json.dumps(world, ensure_ascii=False, indent=2)}
@@ -260,7 +309,7 @@ class BookInitializer:
     【前情摘要】
     {chr(10).join(summaries)}
 
-    请生成 JSON 格式的章节大纲列表（{count}章）：
+    请生成 JSON 格式的章节大纲列表：
     {{
         "outlines": [
             {{
@@ -271,10 +320,13 @@ class BookInitializer:
                 "key_characters": ["角色名"],
                 "climax": "本章高潮",
                 "hook": "悬念钩子",
-                "word_count_target": 3000
+                "word_count_target": 3000,
+                "notes": "可选：若在此章达成当前阶段目标可标注 '目标达成'"
             }}
         ]
     }}
+
+    请在返回的 JSON 最外层包含一条说明，表明共生成多少章以及在哪章达成目标（若适用）。
 
     只返回 JSON，不要其他内容。"""
         
@@ -325,6 +377,21 @@ class BookInitializer:
         with open(f"{base_dir}/configs/outlines.json", 'r', encoding='utf-8') as f:
             outlines = json.load(f)
         
+        # 加载故事状态以获取当前阶段
+        story_state_file = f"{base_dir}/story_state.json"
+        current_stage = 1
+        if os.path.exists(story_state_file):
+            with open(story_state_file, 'r', encoding='utf-8') as f:
+                story_state = json.load(f)
+                current_stage = story_state.get('stage', 1)
+        
+        # 根据当前阶段确定目标
+        current_goal = book_input.get('initial_goal', '')
+        if current_stage >= 2 and 'second_stage_goal' in book_input and book_input['second_stage_goal']:
+            current_goal = book_input['second_stage_goal']
+        elif current_stage >= 3 and 'third_stage_goal' in book_input and book_input['third_stage_goal']:
+            current_goal = book_input['third_stage_goal']
+        
         # 获取时间线列表
         existing_timeline = existing.get("timeline", [])
         
@@ -341,13 +408,20 @@ class BookInitializer:
         last_event_time = existing_timeline[-1].get('time', '未知') if existing_timeline else '故事开始'
         last_event = existing_timeline[-1].get('event', '未知') if existing_timeline else '无'
         
-        prompt = f"""根据以下信息生成 {count} 个新的重大事件时间线：
+        # 如果 count <= 0，允许模型自行判断需要多少事件以实现初始目标
+        if count and count > 0:
+            count_desc = f"{count} 个"
+        else:
+            count_desc = "若干个（请模型判断实现目标所需的事件数量）"
+
+        prompt = f"""根据以下信息生成 {count_desc} 新的重大事件时间线：
 
     【书籍信息】
     - 类型：{book_input["genre"]}
     - 主角核心：{book_input["protagonist_core"]}
     - 金手指：{book_input["cheat_ability"]}
-    - 初始目标：{book_input["initial_goal"]}
+    - 当前阶段目标：{current_goal}
+    - 当前阶段：{current_stage}
 
     【世界设定】
     {json.dumps(world, ensure_ascii=False, indent=2)}
@@ -358,23 +432,12 @@ class BookInitializer:
     【当前剧情进度】
     {chr(10).join(summaries) if summaries else '暂无'}
 
-    请生成 JSON 格式的时间线事件列表（{count}个），确保：
-    1. 时间承接上一个事件之后
-    2. 事件重要性分布合理（1-5 级）
-    3. 包含商业/情感/冲突/机遇等多种类型
-    4. 与当前剧情进度连贯
+    请生成 JSON 格式的时间线事件列表，要求事件能自然承接并引导至当前阶段目标的达成。请在返回的 JSON 中指明在哪一项事件目标达成（字段名示例：`goal_achieved_at`）。
 
+    返回示例结构：
     {{
-        "timeline": [
-            {{
-                "time": "2011 年 6 月",
-                "event": "事件描述",
-                "type": "商业/情感/冲突/机遇",
-                "importance": 1-5,
-                "related_characters": ["角色名"],
-                "related_arc": "关联剧情卷"
-            }}
-        ]
+        "timeline": [ {{"time":"2011 年 6 月", "event":"事件描述", "type":"冲突", "importance":3}} ],
+        "goal_achieved_at": "第N项或时间描述"
     }}
 
     只返回 JSON，不要其他内容。"""

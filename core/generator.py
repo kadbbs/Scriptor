@@ -12,15 +12,61 @@ from openai import OpenAI
 class ChapterGenerator:
     """章节生成器"""
     
-    def __init__(self, api_key: str, base_url: str, book_id: str):
+    def __init__(self, api_key: str, base_url: str, book_id: str, model_name: str = "qwen3.5-plus"):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
-        self.model = "qwen3.5-plus"
+        self.model = model_name
         self.book_id = book_id
         self.base_dir = f"books/{book_id}"
     
     def generate_chapter(self, chapter_num: int, outline: Dict, 
-                         world: Dict, summary: str = "") -> str:
-        """生成单个章节"""
+                         world: Dict, summary: str = "", story_context: Dict = None) -> str:
+        """生成单个章节
+        
+        Args:
+            chapter_num: 章节号
+            outline: 本章大纲
+            world: 世界设定
+            summary: 前情摘要
+            story_context: 故事上下文，包含角色、事件、剧情线等状态信息
+        """
+        
+        # 构建上下文信息
+        context_info = ""
+        if story_context:
+            # 提取关键上下文信息
+            characters = story_context.get('characters', [])
+            events_done = story_context.get('events_done', [])
+            active_plotlines = story_context.get('active_plotlines', [])
+            
+            context_info = """
+【故事上下文】
+- 角色状态："""
+            if characters:
+                char_info = []
+                for char in characters[:5]:  # 只显示前5个重要角色
+                    name = char.get('name', '未知')
+                    role = char.get('role', '')
+                    level = char.get('level', '')
+                    notes = char.get('notes', '')
+                    char_info.append(f"{name}（{role}{', 等级：' + str(level) if level else ''}）{notes}")
+                context_info += "\n  " + "\n  ".join(char_info)
+            else:
+                context_info += "暂无"
+                
+            context_info += """
+- 已完成事件："""
+            if events_done:
+                context_info += "\n  " + "\n  ".join(events_done[-5:])  # 最近5个事件
+            else:
+                context_info += "暂无"
+                
+            context_info += """
+- 活跃剧情线："""
+            if active_plotlines:
+                context_info += "\n  " + "\n  ".join(active_plotlines)
+            else:
+                context_info += "暂无"
+        
         prompt = f"""你是一位专业小说作家。请根据以下信息撰写第{chapter_num}章：
 
 【世界设定】
@@ -31,12 +77,14 @@ class ChapterGenerator:
 
 【前情摘要】
 {summary if summary else "这是第一章，无需前情摘要"}
+{context_info}
 
 【要求】
 - 字数：约{outline.get('word_count_target', 3000)}字
 - 风格：符合{world.get('genre', '都市')}小说风格
 - 节奏：有起承转合，结尾留有悬念
 - 对话：自然流畅，符合人物性格
+- 注意保持与前文角色状态、事件和剧情线的一致性
 
 请直接输出章节内容，不要其他说明。"""
         
@@ -49,8 +97,45 @@ class ChapterGenerator:
         return response.choices[0].message.content
     
     def generate_chapter_stream(self, chapter_num: int, outline: Dict,
-                                 world: Dict, summary: str = ""):
+                                 world: Dict, summary: str = "", story_context: Dict = None):
         """流式生成章节"""
+        # 构建上下文信息
+        context_info = ""
+        if story_context:
+            # 提取关键上下文信息
+            characters = story_context.get('characters', [])
+            events_done = story_context.get('events_done', [])
+            active_plotlines = story_context.get('active_plotlines', [])
+            
+            context_info = """
+【故事上下文】
+- 角色状态："""
+            if characters:
+                char_info = []
+                for char in characters[:5]:  # 只显示前5个重要角色
+                    name = char.get('name', '未知')
+                    role = char.get('role', '')
+                    level = char.get('level', '')
+                    notes = char.get('notes', '')
+                    char_info.append(f"{name}（{role}{', 等级：' + str(level) if level else ''}）{notes}")
+                context_info += "\n  " + "\n  ".join(char_info)
+            else:
+                context_info += "暂无"
+                
+            context_info += """
+- 已完成事件："""
+            if events_done:
+                context_info += "\n  " + "\n  ".join(events_done[-5:])  # 最近5个事件
+            else:
+                context_info += "暂无"
+                
+            context_info += """
+- 活跃剧情线："""
+            if active_plotlines:
+                context_info += "\n  " + "\n  ".join(active_plotlines)
+            else:
+                context_info += "暂无"
+        
         prompt = f"""你是一位专业小说作家。请根据以下信息撰写第{chapter_num}章：
 
 【世界设定】
@@ -61,11 +146,13 @@ class ChapterGenerator:
 
 【前情摘要】
 {summary if summary else "这是第一章，无需前情摘要"}
+{context_info}
 
 【要求】
 - 字数：约{outline.get('word_count_target', 3000)}字
 - 风格：符合{world.get('genre', '都市')}小说风格
 - 节奏：有起承转合，结尾留有悬念
+- 注意保持与前文角色状态、事件和剧情线的一致性
 
 请流式输出章节内容。"""
         
