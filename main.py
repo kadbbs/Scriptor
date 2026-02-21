@@ -111,7 +111,7 @@ def write_chapter(book_id: str, chapter_num: int):
         print(f"⚠️ 抽取/合并状态增量失败：{e}")
         delta = {}
 
-    # 使用 AI 判断是否完成第一阶段，将判定放在此处
+            # 使用 AI 判断是否完成当前阶段目标，将判定放在此处
     try:
         # 读取 book_input
         bi_path = f"books/{book_id}/configs/book_input.json"
@@ -122,14 +122,28 @@ def write_chapter(book_id: str, chapter_num: int):
             book_input = {}
 
         recent_summaries = state_manager.load_recent_summaries(count=5)
-        prompt = f"""你是剧情分析助手。给定以下信息，请判断书籍的第一阶段目标是否已被完成。
+        
+        # 获取当前阶段（需要在较早位置获取）
+        current_stage = state_manager.get_state().get('stage', 1)
+        
+        # 根据当前阶段获取目标和设置
+        stage_goal = book_input.get('initial_goal', '')
+        stage_setting = book_input.get('first_stage_setting', '')
+        if current_stage == 2:
+            stage_goal = book_input.get('second_stage_goal', '')
+            stage_setting = book_input.get('second_stage_setting', '')
+        elif current_stage == 3:
+            stage_goal = book_input.get('third_stage_goal', '')
+            stage_setting = book_input.get('third_stage_setting', '')
+        
+        prompt = f"""你是剧情分析助手。给定以下信息，请判断书籍的第{current_stage}阶段目标是否已被完成。
 
 要求：只返回纯 JSON，格式：
 {{"achieved": true/false, "confidence": 0.0-1.0, "evidence": "简短说明为何完成或未完成"}}
 
 上下文：
-- initial_goal: {book_input.get('initial_goal')}
-- first_stage_setting: {book_input.get('first_stage_setting')}
+- 第{current_stage}阶段目标: {stage_goal}
+- 第{current_stage}阶段地图: {stage_setting}
 - 故事状态 events_done: {state_manager.get_state().get('events_done', [])}
 - 最近摘要：{recent_summaries}
 - 本章抽取的增量 delta: {json.dumps(delta, ensure_ascii=False)}
@@ -154,34 +168,59 @@ def write_chapter(book_id: str, chapter_num: int):
             result = {"achieved": False, "confidence": 0.0, "evidence": "AI 判定失败或返回不可解析内容"}
 
         achieved = bool(result.get('achieved'))
-        current_stage = state_manager.get_state().get('stage', 1)
 
-        if achieved and current_stage == 1:
-            print("\n🎯 AI 判定第一阶段已完成：")
+        if achieved:
+            next_stage = current_stage + 1
+            print(f"\n🎯 AI 判定第{current_stage}阶段目标已完成：")
+            print(f"目标：{stage_goal}")
             print("证据：", result.get('evidence', '无'))
-            confirm = input("要更新并设置第二阶段目标/地图吗？(y/n): ").strip().lower()
+            
+            confirm = input(f"要更新并设置第{next_stage}阶段目标/地图吗？(y/n): ").strip().lower()
             if confirm == 'y':
                 print("留空将保留原值。")
-                new_protagonist = input("主角核心设定（可选，留空则不变）：").strip()
-                new_goal = input("第二阶段目标：").strip()
-                new_setting = input("第二阶段地图：").strip()
+                
+                # 根据下一阶段设置输入项
+                if next_stage == 2:
+                    new_protagonist = input("主角核心设定（可选，留空则不变）：").strip()
+                    new_goal = input("第二阶段目标：").strip()
+                    new_setting = input("第二阶段地图：").strip()
+                elif next_stage == 3:
+                    new_goal = input("第三阶段目标：").strip()
+                    new_setting = input("第三阶段地图：").strip()
+                else:
+                    new_goal = input(f"第{next_stage}阶段目标：").strip()
+                    new_setting = input(f"第{next_stage}阶段地图：").strip()
 
-                if new_protagonist:
+                if next_stage == 2 and new_protagonist:
                     book_input['protagonist_core'] = new_protagonist
                     state_manager.state['protagonist_core'] = new_protagonist
+                
+                # 保存下一阶段目标
                 if new_goal:
-                    book_input['second_stage_goal'] = new_goal
-                    state_manager.state['second_stage_goal'] = new_goal
+                    if next_stage == 2:
+                        book_input['second_stage_goal'] = new_goal
+                        state_manager.state['second_stage_goal'] = new_goal
+                    elif next_stage == 3:
+                        book_input['third_stage_goal'] = new_goal
+                    else:
+                        book_input[f'stage_{next_stage}_goal'] = new_goal
+                
+                # 保存下一阶段地图
                 if new_setting:
-                    book_input['second_stage_setting'] = new_setting
+                    if next_stage == 2:
+                        book_input['second_stage_setting'] = new_setting
+                    elif next_stage == 3:
+                        book_input['third_stage_setting'] = new_setting
+                    else:
+                        book_input[f'stage_{next_stage}_setting'] = new_setting
 
                 try:
-                    state_manager.state['stage'] = 2
+                    state_manager.state['stage'] = next_stage
                     os.makedirs(f"books/{book_id}/configs", exist_ok=True)
                     with open(f"books/{book_id}/configs/book_input.json", 'w', encoding='utf-8') as f:
                         json.dump(book_input, f, ensure_ascii=False, indent=2)
                     state_manager.save_state()
-                    print("✅ 已保存第二阶段设定并将故事阶段标记为 2")
+                    print(f"✅ 已保存第{next_stage}阶段设定并将故事阶段标记为 {next_stage}")
 
                     # 基于新设定重新规划后续大纲与时间线
                     try:
@@ -195,7 +234,7 @@ def write_chapter(book_id: str, chapter_num: int):
                         print(f"⚠️ 重新生成大纲/时间线失败：{e}")
 
                 except Exception as e:
-                    print(f"⚠️ 保存第二阶段设定失败：{e}")
+                    print(f"⚠️ 保存第{next_stage}阶段设定失败：{e}")
             else:
                 print("ℹ️ 已选择不更新下一阶段设定")
     except Exception as e:
