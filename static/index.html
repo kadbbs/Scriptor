@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>网文 Agent</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">网文 Agent</div>
+      <form id="projectForm" class="new-project">
+        <input name="title" placeholder="书名" required />
+        <input name="genre" placeholder="类型：玄幻 / 都市 / 科幻..." />
+        <div class="split">
+          <input name="target_chapters" type="number" min="1" max="2000" value="500" />
+          <input name="chapter_words" type="number" min="500" max="10000" value="3000" />
+        </div>
+        <textarea name="premise" rows="7" placeholder="写下你的点子、主角、金手指、冲突或想要的爽点" required></textarea>
+        <button type="submit">新建项目</button>
+      </form>
+      <div id="projectList" class="project-list"></div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <h1 id="projectTitle">选择或新建一个项目</h1>
+          <p id="projectMeta">从一个点子开始，逐步生成设定、大纲和正文。</p>
+        </div>
+        <div class="actions">
+          <button id="bibleBtn" disabled>生成设定</button>
+          <button id="outlineBtn" disabled>生成大纲批次</button>
+        </div>
+      </header>
+
+      <section class="panels">
+        <section class="panel bible-panel">
+          <div class="panel-head">
+            <h2>作品设定</h2>
+            <span id="status"></span>
+          </div>
+          <pre id="bibleText">暂无设定。</pre>
+        </section>
+
+        <section class="panel chapter-panel">
+          <div class="panel-head">
+            <h2>章节</h2>
+            <div class="outline-controls">
+              <input id="outlineStart" type="number" min="1" value="1" title="起始章节" />
+              <input id="outlineCount" type="number" min="1" max="80" value="20" title="批次数量" />
+            </div>
+          </div>
+          <div id="chapterList" class="chapter-list"></div>
+        </section>
+      </section>
+
+      <section class="editor">
+        <div class="editor-head">
+          <h2 id="chapterTitle">正文</h2>
+          <button id="chapterBtn" disabled>生成本章正文</button>
+        </div>
+        <div id="chapterOutline" class="chapter-outline"></div>
+        <textarea id="chapterContent" spellcheck="false" placeholder="选择章节后显示正文"></textarea>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+
