@@ -44,6 +44,7 @@ def parser():
     export.add_argument("book_id")
     export.add_argument("--output", type=Path)
     serve = commands.add_parser("serve", help="启动本地 HTTP API，交互文档 /docs")
+    serve.add_argument("--host", default="0.0.0.0", help="监听地址（默认 0.0.0.0）")
     serve.add_argument("--port", type=int, default=8000)
     return root
 
@@ -58,7 +59,7 @@ def main(argv=None):
 
             from .api import create_app
 
-            uvicorn.run(create_app(settings), host="127.0.0.1", port=args.port)
+            uvicorn.run(create_app(settings), host=args.host, port=args.port)
             return 0
         repo = Repository(settings.database)
         model = ResponsesModel(settings)

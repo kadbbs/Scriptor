@@ -2,7 +2,7 @@
 
 从头实现的中文长篇小说工作流：**作品设定 → 章节与场景规划 → 正文 → 全文审核 → 剧情记忆 → 阶段验收**。
 
-所有模型请求使用 **Responses API**。提供 CLI 和本地 HTTP API，共用同一业务核心；SQLite 保存正文版本、原文证据和运行记录。
+所有模型请求使用 **Responses API**。提供网页写作工作台、CLI 和 HTTP API，共用同一业务核心；SQLite 保存正文版本、原文证据和运行记录。
 
 本分支只从旧分支提取设计思想，未复用旧业务代码。外部方案比较见 [调研与取舍](docs/research.md)，一致性规则及边界见 [架构说明](docs/architecture.md)。
 
@@ -80,13 +80,24 @@ scriptor export BOOK_ID --output novel.md
 
 如果审核失败、模型输出中断或并发期间书籍发生变化，原正文不变。`runs` 保存普通失败时已生成的候选与审核结果。取出候选并修改后，可用 `scriptor write BOOK_ID N --file candidate.txt` 提交新章，或增加 `--rewrite` 提交最新一章的替代版本。强制杀进程不保证保存尚在内存中的候选。
 
-## 本地 HTTP API
+## 网页写作工作台与 HTTP API
 
 ```bash
 scriptor serve --port 8000
 ```
 
-打开 `http://127.0.0.1:8000/docs` 使用交互接口文档。当前没有定制网页编辑器。
+默认监听 `0.0.0.0`，也可用 `--host` 指定监听地址。本机打开 **`http://127.0.0.1:8000/`** 使用网页编辑器，其他设备使用 `http://服务器IP:8000/`。`/docs` 仍提供交互式 API 文档。页面所需资源随 Python 包安装，不需要 Node.js、前端构建或第三方 CDN。
+
+网页中可以完成：
+
+1. 新建作品，填写创意、风格和阶段验收条件。
+2. 在「作品设定」生成世界、人物、规则和分卷方向。
+3. 在「写作」中规划章节，查看场景安排，生成正文或手动编辑，点击「保存并审核」采纳。
+4. 在阶段面板查看逐项验收证据，完成后填写下一阶段并确认切换。
+5. 在「剧情记忆」查看已发生事实；在「运行记录」查看审核失败原因、下载或恢复候选。
+6. 查看章节历史，载入旧版本重新审核，或导出已采纳的全文。
+
+未保存的编辑会暂存当前浏览器，切换章节或离开页面有提醒。「本地草稿」可载入基于旧版本的草稿。浏览器草稿不是服务器备份，清理浏览器数据后会丢失；正式正文以审核保存成功为准。生成请求完成前界面会锁定操作，避免重复提交或混用作品上下文。
 
 | 方法与路径 | 用途 |
 | --- | --- |
@@ -113,6 +124,13 @@ pytest -q
 
 所有测试离线运行，不需要密钥。包括使用真实 OpenAI Python SDK 的 Responses HTTP 协议测试，以及重写、证据校验、事务回滚、并发冲突、HTTP API 与 CLI 测试。尚未用真实端点验证模型质量。
 
+可选的真实浏览器烟测使用临时数据库和假模型，不会读取或修改实际书籍，不调用付费接口：
+
+```bash
+uv run --extra dev --with playwright python -m playwright install chromium --only-shell
+uv run --extra dev --with playwright python -m tests.browser_editor
+```
+
 ```text
 scriptor/
   models.py       输入及模型输出契约
@@ -122,6 +140,7 @@ scriptor/
   repository.py   SQLite、事务、运行记录和历史
   service.py      写作流程与阶段状态机
   cli.py / api.py 两个共用业务核心的入口
+  static/         无构建依赖的网页编辑器
 tests/            离线验证
 docs/             调研与架构取舍
 examples/         新书及后续阶段配置

@@ -18,6 +18,9 @@ scriptor = "scriptor.cli:main"
 [tool.setuptools.packages.find]
 include = ["scriptor*"]
 
+[tool.setuptools.package-data]
+scriptor = ["static/*.html", "static/*.css", "static/*.js"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

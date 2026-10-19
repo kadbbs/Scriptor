@@ -167,6 +167,15 @@ def test_concurrent_change_rejects_stale_result(setup):
     assert svc.repo.runs(book_id)[0]["artifacts"]["bible"]["world"] == "近未来港口"
 
 
+def test_stale_editor_revision_is_rejected_before_model_call(setup):
+    svc, model, book_id = setup
+    prepare(svc, model, book_id)
+    with pytest.raises(Conflict, match="页面基于旧版本"):
+        svc.write(book_id, 1, content="浏览器草稿", expected_revision=0)
+    assert model.outputs == []
+    assert svc.repo.get(book_id)["total_chapters"] == 0
+
+
 def test_db_mutation_failure_rolls_back_all_changes(setup):
     svc, model, book_id = setup
     run_id, snapshot = svc.repo.start(book_id, "test")

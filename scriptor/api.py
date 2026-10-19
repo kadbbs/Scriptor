@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import Settings
 from .errors import Conflict, ModelError, NotFound, ReviewRejected, ScriptorError
@@ -21,6 +23,12 @@ def create_app(settings: Settings | None = None, model_factory=None):
         yield
 
     app = FastAPI(title="Scriptor", version="0.3.0", lifespan=lifespan)
+    static_dir = Path(__file__).with_name("static")
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def editor():
+        return FileResponse(static_dir / "index.html")
 
     def service(request: Request):
         model = model_factory()
@@ -74,11 +82,23 @@ def create_app(settings: Settings | None = None, model_factory=None):
     def write(
         book_id: str, number: int, payload: WriteRequest, svc: StoryService = Depends(service)
     ):
-        return svc.write(book_id, number, rewrite=payload.rewrite, content=payload.content)
+        return svc.write(
+            book_id,
+            number,
+            rewrite=payload.rewrite,
+            content=payload.content,
+            expected_revision=payload.expected_revision,
+        )
 
     @app.put("/api/books/{book_id}/chapters/{number}")
     def edit(book_id: str, number: int, payload: EditRequest, svc: StoryService = Depends(service)):
-        return svc.write(book_id, number, rewrite=True, content=payload.content)
+        return svc.write(
+            book_id,
+            number,
+            rewrite=True,
+            content=payload.content,
+            expected_revision=payload.expected_revision,
+        )
 
     @app.get("/api/books/{book_id}/chapters/{number}/history")
     def history(book_id: str, number: int, svc: StoryService = Depends(service)):

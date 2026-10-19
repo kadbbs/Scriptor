@@ -14,6 +14,11 @@ def test_api_create_generate_edit_export(tmp_path):
     model = FakeModel()
     app = create_app(Settings(database=tmp_path / "api.db"), lambda: model)
     with TestClient(app) as client:
+        page = client.get("/")
+        assert page.status_code == 200
+        assert "长篇写作工作台" in page.text
+        assert client.get("/static/app.js").status_code == 200
+        assert client.get("/static/styles.css").status_code == 200
         assert client.get("/health").json()["api_format"] == "responses"
         created = client.post(
             "/api/books",

@@ -118,8 +118,19 @@ class StoryService:
 
         return self._execute(book_id, "plan", action)
 
-    def write(self, book_id, number: int, rewrite=False, content: str | None = None):
+    def write(
+        self,
+        book_id,
+        number: int,
+        rewrite=False,
+        content: str | None = None,
+        expected_revision: int | None = None,
+    ):
         def action(book, artifacts):
+            if expected_revision is not None and book["revision"] != expected_revision:
+                raise Conflict(
+                    "页面基于旧版本，书籍已被其他操作修改；本地草稿已保留，请刷新并核对后重试"
+                )
             if not book["bible"]:
                 raise Conflict("请先生成作品设定")
             total = len(book["chapters"])

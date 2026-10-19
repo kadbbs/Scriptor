@@ -103,10 +103,12 @@ class PlanRequest(Contract):
 class WriteRequest(Contract):
     rewrite: bool = False
     content: Text | None = Field(default=None, max_length=60000)
+    expected_revision: int | None = Field(default=None, ge=0)
 
 
 class EditRequest(Contract):
     content: Text = Field(max_length=60000)
+    expected_revision: int | None = Field(default=None, ge=0)
 
 
 class StageRequest(Contract):
