@@ -6,6 +6,14 @@
 
 本分支只从旧分支提取设计思想，未复用旧业务代码。外部方案比较见 [调研与取舍](docs/research.md)，一致性规则及边界见 [架构说明](docs/architecture.md)。
 
+## 界面预览
+
+首页与空书架：
+
+![Scriptor 首页：书架与新作品欢迎区域](docs/images/home.png)
+
+界面布局与交互入口见 [界面说明](docs/interface.md)。
+
 ## 安装与配置
 
 Python 3.10+：
