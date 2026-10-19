@@ -1,15 +1,18 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { books: [], book: null, number: null, tab: "writing", busy: false, baseline: "", runs: [], history: [] };
+const state = { books: [], book: null, number: null, tab: "writing", busy: false, baseline: "", runs: [], history: [], job: null };
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const path = (suffix = "") => `/api/books/${encodeURIComponent(state.book.id)}${suffix}`;
 const dirty = () => $("#content").value !== state.baseline;
 const current = () => state.book?.chapters.find((c) => c.number === state.number);
 const plan = () => state.book?.plans.find((p) => p.number === state.number);
-const canEdit = (number) => !!state.book?.plans.some((p) => p.number === number && p.stage === state.book.stage) && (number === state.book.total_chapters + 1 || number === state.book.total_chapters);
+const canEdit = (number) => state.book?.spec.status !== "completed" && !!state.book?.plans.some((p) => p.number === number && p.stage === state.book.stage) && (number === state.book.total_chapters + 1 || number === state.book.total_chapters);
+const autoActive = () => ["running", "stopping"].includes(state.job?.status);
 const editable = () => canEdit(state.number);
 const draftKey = () => `scriptor:draft:${state.book.id}:${state.number}`;
 let noticeTimer;
 let confirmResolve;
+let pollTimer;
+let loadSequence = 0;
 
 function notify(message, error = false) {
   clearTimeout(noticeTimer);
@@ -58,8 +61,15 @@ function controls() {
   blocked("#history", !current());
   blocked("#stage-submit", !book?.progress.achieved);
   blocked("#draft-restore", !editable());
+  const ended = book?.spec.status === "completed";
+  blocked("#step", !book || ended);
+  blocked("#auto-open", !book || ended);
+  blocked("#auto-pause", state.job?.status !== "running");
+  for (const selector of ["#plan-open", "#bible-generate", "#generate", "#save", "#stage-submit", "#step", "#auto-open", "#draft-restore"]) {
+    if (autoActive() || ended) blocked(selector, true);
+  }
   document.querySelectorAll("button").forEach((button) => { button.disabled = state.busy || button.dataset.blocked === "true"; });
-  $("#content").disabled = state.busy || !editable();
+  $("#content").disabled = state.busy || autoActive() || !editable();
   $("#export").setAttribute("aria-disabled", String(state.busy));
 }
 async function action(label, task) {
@@ -77,27 +87,53 @@ function renderShelf() {
   $("#book-list").innerHTML = state.books.length ? state.books.map((b) => `<button class="book-item ${b.id === state.book?.id ? "active" : ""}" data-book="${escape(b.id)}"><strong>${escape(b.spec.title)}</strong><small>${escape(b.spec.genre)} · ${b.total_chapters} 章 · ${Number(b.total_words).toLocaleString()} 字符</small></button>`).join("") : '<div class="empty">书架还空着。<br>从一个想法开始吧。</div>';
 }
 async function loadBook(id, number = null) {
-  state.book = await api(`/api/books/${encodeURIComponent(id)}`);
+  clearTimeout(pollTimer);
+  const sequence = ++loadSequence;
+  const [book, jobs] = await Promise.all([api(`/api/books/${encodeURIComponent(id)}`), api(`/api/books/${encodeURIComponent(id)}/auto`)]);
+  if (sequence !== loadSequence) return;
+  state.book = book; state.job = jobs[0] || null;
   const available = [...new Set([...state.book.plans, ...state.book.chapters].map((c) => c.number))].sort((a, b) => a - b);
   state.number = available.includes(number) ? number : available.includes(state.book.total_chapters + 1) ? state.book.total_chapters + 1 : available.at(-1) ?? null;
   state.runs = []; state.history = [];
   renderBook(); renderEditor();
   await refreshShelf();
   if (state.tab === "runs") await loadRuns();
+  renderAuto(); schedulePoll(); controls();
+}
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  if (!autoActive()) return;
+  const id = state.book.id;
+  pollTimer = setTimeout(async () => {
+    if (state.book?.id !== id) return;
+    if (state.busy) return schedulePoll();
+    try { await loadBook(id, state.number); }
+    catch (error) { notify(`进度读取失败：${error.message}`, true); schedulePoll(); }
+  }, 2000);
+}
+function renderAuto() {
+  const job = state.job;
+  $("#auto-status").hidden = !job;
+  if (!job) return;
+  const names = { running: "自动写作中", stopping: "正在暂停", paused: "已暂停，可继续自动运行", completed: "本次自动运行完成", failed: "自动运行已停止", interrupted: "任务曾中断，可继续自动运行" };
+  $("#auto-label").textContent = names[job.status] || job.status;
+  $("#auto-info").textContent = `本次新增 ${job.completed} / ${job.target} 章 · ${job.error || job.phase}`;
+  $("#auto-status").classList.toggle("failed", ["failed", "interrupted"].includes(job.status));
+  $("#auto-pause").hidden = !autoActive();
 }
 function renderBook() {
   const b = state.book;
   $("#welcome").hidden = true; $("#workspace").hidden = false;
   $("#breadcrumb").textContent = `我的作品 / ${b.spec.title}`;
   $("#book-title").textContent = b.spec.title; $("#book-genre").textContent = b.spec.genre;
-  $("#book-meta").textContent = `${b.total_chapters} 章已完成 · ${b.total_words.toLocaleString()} 字符 · 单章目标 ${b.spec.chapter_words} 字`;
-  $("#stage-label").textContent = `阶段 ${b.stage}`; $("#stage-goal").textContent = b.progress.goal;
+  $("#book-meta").textContent = b.stage ? `${b.total_chapters} 章已完成 · ${b.total_words.toLocaleString()} 字符 · LLM 决定单章约 ${b.spec.chapter_words} 字` : "点子已保存 · 人物、世界、剧情和成长体系均由 LLM 构思";
+  $("#stage-label").textContent = b.spec.status === "completed" ? "已完结" : b.stage ? `阶段 ${b.stage}` : "待构思"; $("#stage-goal").textContent = b.progress.goal;
   $("#export").href = path("/export");
   const available = [...new Set([...b.plans, ...b.chapters].map((c) => c.number))].sort((a, z) => a - z);
   $("#chapter-list").innerHTML = available.length ? available.map((number) => {
     const ch = b.chapters.find((c) => c.number === number), p = b.plans.find((c) => c.number === number);
     return `<button class="chapter-item ${state.number === number ? "active" : ""}" data-chapter="${number}"><span>第 ${String(number).padStart(2, "0")} 章 <em>${ch ? "已采纳" : "待写作"}</em></span><strong>${escape(ch?.title || p?.data.title)}</strong></button>`;
-  }).join("") : `<div class="empty">${b.bible ? "点击「规划」<br>安排第一批章节" : "先在「作品设定」<br>构建故事的世界"}</div>`;
+  }).join("") : '<div class="empty">点击「推进下一章」<br>其余交给 LLM</div>';
   renderBible(); renderMemory(); showTab(state.tab);
 }
 function renderEditor({ restore = true } = {}) {
@@ -130,8 +166,8 @@ function updateEditorStatus() {
 }
 function renderBible() {
   const b = state.book.bible;
-  $("#bible-generate").textContent = b ? "重新生成设定" : "生成作品设定";
-  $("#bible-content").innerHTML = b ? `<article class="card"><h3>世界与时代</h3><p>${escape(b.world)}</p><h3>不可违背的规则</h3><ol>${b.rules.map((r) => `<li>${escape(r)}</li>`).join("")}</ol></article><div class="card-grid">${b.characters.map((c) => `<article class="card"><h3>${escape(c.name)}</h3><p>欲望：${escape(c.motivation)}</p><p class="muted">限制：${escape(c.constraints)}</p></article>`).join("")}</div><article class="card"><h3>分卷方向</h3>${b.arcs.map((a, i) => `<p><strong>${i + 1}. ${escape(a.title)}</strong><br>${escape(a.conflict)}<br><span class="muted">回报：${escape(a.payoff)}</span></p>`).join("")}<hr><h3>结局方向</h3><p>${escape(b.ending_direction)}</p></article>` : '<div class="empty">创意已就位。点击「生成作品设定」，构建世界规则、角色和分卷方向。</div>';
+  $("#bible-generate").textContent = b ? "重新构思方案" : "由 LLM 构思全部方案";
+  $("#bible-content").innerHTML = b ? `<article class="card"><h3>世界与时代</h3><p>${escape(b.world)}</p><h3>不可违背的规则</h3><ol>${b.rules.map((r) => `<li>${escape(r)}</li>`).join("")}</ol>${b.central_conflict ? `<hr><h3>主线冲突</h3><p>${escape(b.central_conflict)}</p>` : ""}</article><div class="card-grid">${b.characters.map((c) => `<article class="card">${c.role ? `<span class="pill">${({protagonist:"主角", supporting:"配角", antagonist:"反派"})[c.role] || escape(c.role)}</span>` : ""}<h3>${escape(c.name)}</h3><p>欲望：${escape(c.motivation)}</p><p class="muted">限制：${escape(c.constraints)}</p>${c.growth ? `<p>成长：${escape(c.growth)}</p><p>关系：${escape(c.relationships)}</p>` : ""}</article>`).join("")}</div>${(b.maps || []).length ? `<h3 class="design-section">地图与解锁</h3><div class="card-grid">${b.maps.map((m) => `<article class="card"><h3>${escape(m.name)}</h3><p>${escape(m.identity)}</p><p>冲突：${escape(m.conflict)}</p><p class="muted">解锁：${escape(m.unlock_condition)}</p></article>`).join("")}</div>` : ""}${(b.systems || []).length ? `<h3 class="design-section">成长体系与升级策略</h3>${b.systems.map((s) => `<article class="card"><h3>${escape(s.name)}</h3><p>${escape(s.rules)}</p><div class="system-levels">${s.levels.map((l) => `<span class="pill">${escape(l)}</span>`).join("")}</div><p>升级：${escape(s.advancement)}</p><p>代价：${escape(s.costs)}</p><p>限制：${escape(s.limits)}</p></article>`).join("")}` : ""}${b.growth_strategy ? `<article class="card"><h3>整体升级策略</h3><p>${escape(b.growth_strategy)}</p><h3>叙事策略</h3><p>${escape(b.narrative_strategy)}</p></article>` : ""}<article class="card"><h3>分卷方向</h3>${b.arcs.map((a, i) => `<p><strong>${i + 1}. ${escape(a.title)}</strong><br>${escape(a.conflict)}<br><span class="muted">回报：${escape(a.payoff)}</span></p>`).join("")}<hr><h3>结局方向</h3><p>${escape(b.ending_direction)}</p></article>` : '<div class="empty">点子已保存。点击「推进下一章」或「自动运行」，LLM 会决定人物、地图、冲突与成长体系。也可以先单独构思方案。</div>';
 }
 function renderMemory() {
   const names = { character: "人物状态", event: "已发生事件", thread: "伏笔" };
@@ -144,7 +180,7 @@ function showTab(tab) {
 }
 async function loadRuns() {
   state.runs = await api(path("/runs"));
-  const names = { bible: "作品设定", plan: "章节规划", write: "正文生成", edit: "正文审核", advance: "阶段切换" };
+  const names = { conceive: "自主构思", direct: "导演决策", bible: "作品设定", plan: "章节规划", write: "正文生成", edit: "正文审核", advance: "阶段切换" };
   $("#runs-content").innerHTML = state.runs.length ? state.runs.map((run, i) => {
     const art = run.artifacts, candidate = art.candidate;
     const tokens = run.calls.reduce((sum, c) => sum + (c.usage?.total_tokens || 0), 0);
@@ -153,11 +189,11 @@ async function loadRuns() {
 }
 function stageDialog() {
   const progress = state.book.progress;
-  $("#stage-progress").innerHTML = `<p>${escape(progress.goal)}</p>${progress.criteria.map((c) => `<div class="criterion"><strong class="${c.achieved ? "success" : "muted"}">${c.achieved ? "✓" : "○"} ${escape(c.criterion)}</strong>${c.evidence.map((e) => `<blockquote>第 ${e.chapter} 章：${e.quotes.map(escape).join("；")}</blockquote>`).join("")}</div>`).join("")}`;
-  $("#stage-hint").textContent = progress.achieved ? "当前目标已验收。填写新目标并确认后，旧的未写规划会被清除。" : "当前阶段尚未全部验收，完成后才能进入下一阶段。";
+  const design = state.book.stages.find((s) => s.number === state.book.stage)?.spec;
+  $("#stage-progress").innerHTML = `<p>${escape(progress.goal)}</p>${design?.development ? `<article class="card"><h3>本阶段升级与人物推进</h3><p>${escape(design.development)}</p><small>舞台：${escape(design.setting)}</small><p>后续承接：${escape(design.exit_hook)}</p></article>` : ""}${progress.criteria.map((c) => `<div class="criterion"><strong class="${c.achieved ? "success" : "muted"}">${c.achieved ? "✓" : "○"} ${escape(c.criterion)}</strong>${c.evidence.map((e) => `<blockquote>第 ${e.chapter} 章：${e.quotes.map(escape).join("；")}</blockquote>`).join("")}</div>`).join("")}`;
+  $("#stage-hint").textContent = progress.achieved ? "当前阶段已完成。继续推进时，LLM 会自主决定下一阶段的目标、地图、升级安排，或决定收束全书。无需填写新目标。" : "阶段安排与验收项由 LLM 制定。继续写作，系统会根据正文证据检查推进情况。";
   $("#stage-dialog").showModal(); controls();
 }
-function acceptance(form) { return [...new Set(form.get("acceptance").split(/\r?\n/).map((x) => x.trim()).filter(Boolean))]; }
 function download(text, filename) {
   const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
   const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -194,11 +230,11 @@ $("#refresh").onclick = async () => {
 };
 $("#book-form").onsubmit = async (event) => {
   event.preventDefault(); if (!await leaveDraft()) return;
-  const f = new FormData(event.currentTarget), rules = acceptance(f);
-  if (!rules.length || rules.length > 20) return notify("请输入 1–20 条验收条件，每行一条", true);
+  const f = new FormData(event.currentTarget), points = f.get("points").split(/\r?\n/).map((p) => p.trim()).filter(Boolean);
+  if (points.length > 30) return notify("要点最多 30 条", true);
   await action("创建作品…", async () => {
-    const result = await post("/api/books", { book: { title: f.get("title"), genre: f.get("genre"), premise: f.get("premise"), style: f.get("style").trim() || "中文网文，场景具体，人物动机清楚", chapter_words: +f.get("chapter_words") }, stage: { goal: f.get("goal"), setting: f.get("setting"), acceptance: rules } });
-    $("#book-dialog").close(); $("#book-form").reset(); state.tab = "bible"; await loadBook(result.id); notify("作品已创建，接下来生成作品设定");
+    const result = await post("/api/books", { ideas: f.get("ideas"), points, style: f.get("style").trim() || "中文网文，场景具体，人物动机清楚" });
+    $("#book-dialog").close(); $("#book-form").reset(); state.tab = "writing"; await loadBook(result.id); notify("点子已保存，点击「推进下一章」或「自动运行」即可开始");
   });
 };
 $("#bible-generate").onclick = async () => {
@@ -231,17 +267,37 @@ $("#save").onclick = async () => {
 $("#advance").onclick = stageDialog;
 $("#stage-form").onsubmit = async (event) => {
   event.preventDefault(); if (!await leaveDraft()) return;
-  const f = new FormData(event.currentTarget), rules = acceptance(f);
-  if (!rules.length || rules.length > 20) return notify("请输入 1–20 条验收条件", true);
-  await action("更新阶段…", async () => { await post(path("/stages"), { stage: { goal: f.get("goal"), setting: f.get("setting"), acceptance: rules }, confirm: f.has("confirm") }); $("#stage-dialog").close(); $("#stage-form").reset(); await loadBook(state.book.id); notify("已开启下一阶段，请重新规划后续章节"); });
+  await action("LLM 正在决定后续方向…", async () => { await post(path("/direct")); $("#stage-dialog").close(); await loadBook(state.book.id); notify("导演决策已保存"); });
 };
+$("#step").onclick = async () => {
+  if (!await leaveDraft()) return;
+  await action("LLM 正在构思、规划、写作与审核，请稍候…", async () => {
+    const result = await post(path("/step")); state.tab = "writing";
+    await loadBook(state.book.id, result.number ?? state.number);
+    notify(result.finished ? "故事已经收束，作品已完结" : `第 ${result.number} 章已完成并审核保存`);
+  });
+};
+$("#auto-open").onclick = () => $("#auto-dialog").showModal();
+$("#auto-form").onsubmit = async (event) => {
+  event.preventDefault(); if (!await leaveDraft()) return;
+  const f = new FormData(event.currentTarget);
+  await action("启动自动写作…", async () => {
+    await post(path("/auto"), { chapters: +f.get("chapters") });
+    $("#auto-dialog").close(); await loadBook(state.book.id, state.number);
+    notify("自动任务已启动，可以关闭页面；再次打开作品可查看进度");
+  });
+};
+$("#auto-pause").onclick = () => action("请求暂停…", async () => {
+  await post(path(`/auto/${encodeURIComponent(state.job.id)}/pause`));
+  await loadBook(state.book.id, state.number); notify("已请求暂停，将在当前步骤保存后停止");
+});
 $("#history").onclick = () => action("读取历史版本…", async () => {
   state.history = await api(path(`/chapters/${state.number}/history`));
   $("#history-content").innerHTML = state.history.map((v, i) => `<article class="card"><h3>版本 ${v.version} · ${escape(v.title)}</h3><small>${escape(v.created_at)} UTC</small><div class="history-content">${escape(v.content)}</div><div class="run-actions"><button data-history="${i}" class="secondary">载入编辑器</button><button data-download-history="${i}" class="subtle">下载</button></div></article>`).join("") || '<div class="empty">暂无历史版本</div>';
   $("#history-dialog").showModal();
 });
 async function recover(content, number = state.number, confirmed = false) {
-  if (!canEdit(number)) return notify("该候选对应章节当前不可编辑；仅可恢复当前阶段的最新一章或已规划的下一章。可先下载留存", true);
+  if (autoActive() || !canEdit(number)) return notify("该章节当前不可编辑；请先暂停自动运行，并选择当前阶段最新一章或已规划下一章", true);
   if (!confirmed && dirty() && !await ask("替换编辑器内容？", "当前未保存的修改将被替换。载入后仍需点击「保存并审核」才能采纳。")) return;
   if (number !== state.number) { state.number = number; renderBook(); renderEditor({ restore: false }); }
   $("#content").value = content; showTab("writing"); updateEditorStatus(); persistDraft(); controls(); notify("已载入编辑器；审核保存后才会成为正式正文");

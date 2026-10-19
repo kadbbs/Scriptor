@@ -25,9 +25,20 @@ class StageInput(Contract):
     acceptance: list[Text] = Field(min_length=1, max_length=20)
 
 
+class StageDesign(StageInput):
+    development: Text
+    exit_hook: Text
+
+
 class CreateBook(Contract):
     book: BookInput
     stage: StageInput
+
+
+class IdeaInput(Contract):
+    ideas: Text = Field(max_length=12000)
+    points: list[Text] = Field(default_factory=list, max_length=30)
+    style: Text = Field(default="中文网文，场景具体，人物动机清楚", max_length=4000)
 
 
 class Character(Contract):
@@ -48,6 +59,55 @@ class Bible(Contract):
     characters: list[Character] = Field(min_length=1)
     arcs: list[Arc] = Field(min_length=1)
     ending_direction: Text
+
+
+class CastMember(Character):
+    role: Literal["protagonist", "supporting", "antagonist"]
+    growth: Text
+    relationships: Text
+
+
+class StoryMap(Contract):
+    name: Text
+    identity: Text
+    conflict: Text
+    unlock_condition: Text
+
+
+class GrowthSystem(Contract):
+    name: Text
+    rules: Text
+    levels: list[Text] = Field(min_length=1)
+    advancement: Text
+    costs: Text
+    limits: Text
+
+
+class WorldDesign(Bible):
+    characters: list[CastMember] = Field(min_length=3)
+    maps: list[StoryMap] = Field(min_length=1)
+    systems: list[GrowthSystem] = Field(min_length=1)
+    central_conflict: Text
+    growth_strategy: Text
+    narrative_strategy: Text
+
+
+class CreativeBlueprint(Contract):
+    title: Text = Field(max_length=120)
+    genre: Text = Field(max_length=80)
+    chapter_words: int = Field(ge=300, le=10000)
+    bible: WorldDesign
+    first_stage: StageDesign
+
+
+class Direction(Contract):
+    finished: bool = Field(strict=True)
+    rationale: Text
+    next_stage: StageDesign | None
+
+
+class AutoRequest(Contract):
+    chapters: int = Field(default=10, ge=1, le=500)
 
 
 class Scene(Contract):

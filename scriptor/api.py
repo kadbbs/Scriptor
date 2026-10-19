@@ -5,11 +5,21 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import __version__
 from .config import Settings
 from .errors import Conflict, ModelError, NotFound, ReviewRejected, ScriptorError
 from .llm import ResponsesModel
-from .models import CreateBook, EditRequest, PlanRequest, StageRequest, WriteRequest
+from .models import (
+    AutoRequest,
+    CreateBook,
+    EditRequest,
+    IdeaInput,
+    PlanRequest,
+    StageRequest,
+    WriteRequest,
+)
 from .repository import Repository
+from .runner import AutoRunner
 from .service import StoryService
 
 
@@ -20,9 +30,13 @@ def create_app(settings: Settings | None = None, model_factory=None):
     @asynccontextmanager
     async def lifespan(app):
         app.state.repo = Repository(settings.database)
-        yield
+        app.state.runner = AutoRunner(app.state.repo, model_factory, settings)
+        try:
+            yield
+        finally:
+            app.state.runner.close()
 
-    app = FastAPI(title="Scriptor", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="Scriptor", version=__version__, lifespan=lifespan)
     static_dir = Path(__file__).with_name("static")
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -63,8 +77,33 @@ def create_app(settings: Settings | None = None, model_factory=None):
         return svc.repo.list()
 
     @app.post("/api/books", status_code=201)
-    def create(payload: CreateBook, svc: StoryService = Depends(service)):
+    def create(payload: IdeaInput | CreateBook, svc: StoryService = Depends(service)):
         return svc.repo.create(payload)
+
+    @app.post("/api/books/{book_id}/step")
+    def step(book_id: str, svc: StoryService = Depends(service)):
+        return svc.step(book_id)
+
+    @app.post("/api/books/{book_id}/conceive")
+    def conceive(book_id: str, svc: StoryService = Depends(service)):
+        return svc.conceive(book_id)
+
+    @app.post("/api/books/{book_id}/direct")
+    def direct(book_id: str, svc: StoryService = Depends(service)):
+        return svc.direct(book_id)
+
+    @app.post("/api/books/{book_id}/auto", status_code=202)
+    def auto(book_id: str, payload: AutoRequest, request: Request):
+        return request.app.state.runner.start(book_id, payload.chapters)
+
+    @app.get("/api/books/{book_id}/auto")
+    def auto_status(book_id: str, request: Request):
+        request.app.state.repo.get(book_id)
+        return request.app.state.repo.jobs(book_id)
+
+    @app.post("/api/books/{book_id}/auto/{job_id}/pause")
+    def pause(book_id: str, job_id: str, request: Request):
+        return request.app.state.repo.pause_job(book_id, job_id)
 
     @app.get("/api/books/{book_id}")
     def inspect(book_id: str, svc: StoryService = Depends(service)):

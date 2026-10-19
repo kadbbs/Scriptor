@@ -22,11 +22,11 @@ def terms(text):
 
 
 def build_context(book, before: int, budget: int, focus=None):
-    stage = next(s for s in book["stages"] if s["number"] == book["stage"])
+    stage = next((s for s in book["stages"] if s["number"] == book["stage"]), None)
     required = {
         "book": book["spec"],
         "bible": book["bible"],
-        "stage": {"number": stage["number"], **stage["spec"]},
+        "stage": {"number": stage["number"], **stage["spec"]} if stage else None,
         "task": focus,
     }
     result = dump(required)
@@ -55,7 +55,7 @@ def build_context(book, before: int, budget: int, focus=None):
             },
         ):
             raise ScriptorError("上下文预算不足以容纳上一章，请增加 SCRIPTOR_CONTEXT_CHARS")
-    query = terms(dump(focus) + stage["spec"]["goal"])
+    query = terms(dump(focus) + (stage["spec"]["goal"] if stage else book["spec"]["premise"]))
     facts = memory(chapters)
     facts.sort(
         key=lambda f: (

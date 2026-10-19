@@ -1,6 +1,7 @@
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -8,19 +9,23 @@ from pydantic import ValidationError
 from .config import Settings
 from .errors import ScriptorError
 from .llm import ResponsesModel
-from .models import CreateBook, PlanRequest, StageInput
+from .models import CreateBook, IdeaInput, PlanRequest, StageInput
 from .repository import Repository
+from .runner import AutoRunner
 from .service import StoryService
 
 
 def parser():
     root = argparse.ArgumentParser(prog="scriptor", description="Responses API 长篇小说工作流")
     commands = root.add_subparsers(dest="command", required=True)
-    create = commands.add_parser("create", help="从 JSON 文件创建书籍及首阶段")
+    create = commands.add_parser("create", help="从点子、要点和风格 JSON 创建作品")
     create.add_argument("--input", type=Path, required=True)
     commands.add_parser("list", help="列出书籍")
-    for name in ("show", "bible", "runs"):
+    for name in ("show", "bible", "runs", "step", "conceive", "direct"):
         commands.add_parser(name).add_argument("book_id")
+    auto = commands.add_parser("auto", help="自动构思、规划、写作及推进阶段，可用 Ctrl+C 请求暂停")
+    auto.add_argument("book_id")
+    auto.add_argument("--chapters", type=int, default=10, choices=range(1, 501), metavar="1..500")
     plan = commands.add_parser("plan", help="生成或替换未写章节的大纲后缀")
     plan.add_argument("book_id")
     plan.add_argument("--start", type=int, required=True)
@@ -65,8 +70,9 @@ def main(argv=None):
         model = ResponsesModel(settings)
         svc = StoryService(repo, model, settings)
         if args.command == "create":
+            raw = json.loads(args.input.read_text(encoding="utf-8"))
             result = repo.create(
-                CreateBook.model_validate_json(args.input.read_text(encoding="utf-8"))
+                IdeaInput.model_validate(raw) if "ideas" in raw else CreateBook.model_validate(raw)
             )
         elif args.command == "list":
             result = repo.list()
@@ -74,6 +80,29 @@ def main(argv=None):
             result = svc.inspect(args.book_id)
         elif args.command == "bible":
             result = svc.bible(args.book_id)
+        elif args.command == "conceive":
+            result = svc.conceive(args.book_id)
+        elif args.command == "step":
+            result = svc.step(args.book_id)
+        elif args.command == "direct":
+            result = svc.direct(args.book_id)
+        elif args.command == "auto":
+            runner = AutoRunner(repo, lambda: ResponsesModel(settings), settings)
+            job = runner.start(args.book_id, args.chapters)
+            try:
+                try:
+                    while repo.job(args.book_id, job["id"])["status"] in ("running", "stopping"):
+                        time.sleep(0.5)
+                except KeyboardInterrupt:
+                    repo.pause_job(args.book_id, job["id"])
+                    print("已请求暂停，等待当前步骤完成…", file=sys.stderr)
+                    while repo.job(args.book_id, job["id"])["status"] in ("running", "stopping"):
+                        time.sleep(0.5)
+                result = repo.job(args.book_id, job["id"])
+            finally:
+                runner.close()
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 1 if result["status"] in ("failed", "interrupted") else 0
         elif args.command == "plan":
             result = svc.plan(args.book_id, PlanRequest(start=args.start, count=args.count))
         elif args.command == "write":
@@ -111,7 +140,7 @@ def main(argv=None):
             return 0
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    except (ScriptorError, ValidationError, OSError) as exc:
+    except (ScriptorError, ValidationError, OSError, json.JSONDecodeError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
     finally:

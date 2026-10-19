@@ -1,7 +1,15 @@
 import pytest
 
 from scriptor.config import Settings
-from scriptor.models import Bible, ChapterPlan, CreateBook, PlanBatch, Review
+from scriptor.models import (
+    Bible,
+    ChapterPlan,
+    CreateBook,
+    CreativeBlueprint,
+    PlanBatch,
+    Review,
+    StageDesign,
+)
 from scriptor.repository import Repository
 from scriptor.service import StoryService
 
@@ -37,6 +45,78 @@ def plan(number=1, stage=1):
                 }
             ],
         }
+    )
+
+
+def stage_design(goal="确认来信", criterion="确认笔迹"):
+    return StageDesign(
+        goal=goal,
+        setting="旧港",
+        acceptance=[criterion],
+        development="以维修技能换取信息，冒险暴露身份而非直接获得力量",
+        exit_hook="航线将指向灯塔",
+    )
+
+
+def blueprint():
+    world = bible().model_dump()
+    world.update(
+        {
+            "characters": [
+                {
+                    "name": "林海",
+                    "role": "protagonist",
+                    "motivation": "寻找姐姐",
+                    "constraints": "不能游泳",
+                    "growth": "从独行到信任伙伴",
+                    "relationships": "姐姐的弟弟",
+                },
+                {
+                    "name": "阿舟",
+                    "role": "supporting",
+                    "motivation": "保住船",
+                    "constraints": "负债",
+                    "growth": "承担责任",
+                    "relationships": "林海的向导",
+                },
+                {
+                    "name": "站长",
+                    "role": "antagonist",
+                    "motivation": "控制航线",
+                    "constraints": "怕失去权力",
+                    "growth": "逐渐暴露弱点",
+                    "relationships": "阻止林海",
+                },
+            ],
+            "maps": [
+                {
+                    "name": "旧港",
+                    "identity": "维修与走私共存",
+                    "conflict": "封锁航线",
+                    "unlock_condition": "解开检修单",
+                }
+            ],
+            "systems": [
+                {
+                    "name": "维修与信息",
+                    "rules": "技能换取资源",
+                    "levels": ["学徒", "独立维修员"],
+                    "advancement": "实际修好装置",
+                    "costs": "暴露身份",
+                    "limits": "不能凭空制造材料",
+                }
+            ],
+            "central_conflict": "真相与航线垄断",
+            "growth_strategy": "技能、信任与资源相互制约",
+            "narrative_strategy": "用行动揭露信息，保持克制悬疑",
+        }
+    )
+    return CreativeBlueprint(
+        title="失约的灯塔",
+        genre="近未来悬疑",
+        chapter_words=3000,
+        bible=world,
+        first_stage=stage_design(),
     )
 
 

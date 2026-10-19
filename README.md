@@ -1,18 +1,16 @@
 # Scriptor
 
-从头实现的中文长篇小说工作流：**作品设定 → 章节与场景规划 → 正文 → 全文审核 → 剧情记忆 → 阶段验收**。
+**你给点子、要点和行文风格，LLM 决定故事的其余部分。**
 
-所有模型请求使用 **Responses API**。提供网页写作工作台、CLI 和 HTTP API，共用同一业务核心；SQLite 保存正文版本、原文证据和运行记录。
+书名、题材、主角、配角、反派、地图、冲突、成长体系、升级策略、分卷和阶段安排，都由 LLM 自主构思。用户可以逐章手动推进，也可以开启后台自动运行；无需提前填写阶段目标或验收条件。
 
-本分支只从旧分支提取设计思想，未复用旧业务代码。外部方案比较见 [调研与取舍](docs/research.md)，一致性规则及边界见 [架构说明](docs/architecture.md)。
+所有模型调用使用 **Responses API**。网页、CLI 和 HTTP API 共用同一写作核心，SQLite 保存创作方案、正文、证据记忆、版本历史和自动任务进度。
 
 ## 界面预览
 
-首页与空书架：
+![Scriptor 首页：从点子开始写作](docs/images/home.png)
 
-![Scriptor 首页：书架与新作品欢迎区域](docs/images/home.png)
-
-界面布局与交互入口见 [界面说明](docs/interface.md)。
+![LLM 自主创作工作台：手动推进与自动运行](docs/images/workspace.png)
 
 ## 安装与配置
 
@@ -25,7 +23,7 @@ python -m pip install -e '.[dev]'
 cp .env.example .env
 ```
 
-在 `.env` 中填写：
+填写 `.env`：
 
 ```dotenv
 OPENAI_API_KEY=你的密钥
@@ -33,94 +31,121 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=你有权限使用且支持Responses的模型
 ```
 
-仓库附有 `uv.lock`。如使用 uv，可用 `uv sync --locked --extra dev` 安装锁定依赖；CI 使用同一锁文件。
-
-`OPENAI_BASE_URL` 是 API 根路径，不要追加 `/responses`。第三方服务必须支持 `POST /responses`；仅有 OpenAI Chat Completions 兼容接口不足以运行本项目。不会静默改用其他 API。
+也可通过 `uv sync --locked --extra dev` 安装锁定依赖。环境变量优先于 `.env`。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | 空 | 生成时必填；本地新建、查询、导出不需要 |
-| `OPENAI_MODEL` | 空 | 显式选择模型，不绑定厂商 |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Responses 服务根地址 |
-| `SCRIPTOR_DB` | `data/scriptor.db` | 新版数据库，与旧文件布局分开 |
-| `SCRIPTOR_TIMEOUT` | `180` | 单次请求超时秒数，SDK 最多重试两次 |
-| `SCRIPTOR_MAX_OUTPUT_TOKENS` | `12000` | 单次模型输出 token 上限 |
-| `SCRIPTOR_STRUCTURED_OUTPUT` | `true` | 服务端严格 JSON Schema；显式设为 `false` 时仍用 Responses，但只本地校验 JSON |
-| `SCRIPTOR_CONTEXT_CHARS` | `28000` | 上下文字符预算，审核为完整正文预留空间；不是 token 数 |
+| `OPENAI_API_KEY` | 空 | 生成时必填；保存点子和读取作品不需要 |
+| `OPENAI_MODEL` | 空 | 显式选择可用模型，不绑定厂商 |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API 根路径，不追加 `/responses` |
+| `SCRIPTOR_DB` | `data/scriptor.db` | SQLite 数据库 |
+| `SCRIPTOR_TIMEOUT` | `180` | 单次请求超时秒数；SDK 最多重试两次 |
+| `SCRIPTOR_MAX_OUTPUT_TOKENS` | `12000` | 单次输出 token 上限 |
+| `SCRIPTOR_STRUCTURED_OUTPUT` | `true` | 严格 JSON Schema；设为 `false` 时仍使用 Responses，仅本地校验 JSON |
+| `SCRIPTOR_CONTEXT_CHARS` | `28000` | 上下文字符预算，不是 token 数；审核包含完整正文 |
 
-环境变量优先于 `.env`。示例不含有效密钥，数据库、虚拟环境和 `.env` 不进入 Git。
+第三方服务必须实现 `POST /responses`。仅兼容 Chat Completions 不足以使用本项目，不会自动回退到其他 API。
 
-## 命令行工作流
-
-```bash
-# 编辑示例，填写点子、题材、风格和阶段验收标准
-scriptor create --input examples/book.json
-scriptor list
-
-# 将 BOOK_ID 替换成 create 返回的 id
-scriptor bible BOOK_ID
-scriptor plan BOOK_ID --start 1 --count 5
-scriptor write BOOK_ID 1
-scriptor show BOOK_ID
-scriptor write BOOK_ID 2
-
-# 最新一章可以显式重写，旧版本保留
-scriptor write BOOK_ID 2 --rewrite
-scriptor history BOOK_ID 2
-
-# 或提交手写/修订正文，仍经过全文审核
-scriptor edit BOOK_ID 2 --file chapter-2.txt
-
-# 当前阶段验收全部达成后，由作者确认下一阶段
-scriptor advance BOOK_ID --input examples/next-stage.json --confirm
-scriptor plan BOOK_ID --start 3 --count 5
-
-# 查看调用、失败候选和审核信息，导出采纳后的正文
-scriptor runs BOOK_ID
-scriptor export BOOK_ID --output novel.md
-```
-
-也可使用 `python -m scriptor`。命令输出 UTF-8 JSON；失败返回非零退出码。批量写作可通过脚本循环，但每章失败应停止并检查原因。
-
-生成大纲每批 1–20 章，可从任一未写章节开始替换后续规划；不会重复追加同编号章节。正文按顺序写，仅支持编辑当前阶段最新一章，避免历史改动污染后文。重写后字数和记忆按当前版本计算，并清除依赖旧正文的后续规划，需要重新运行 `plan`。
-
-阶段验收依据正文实际发生的事，而非大纲中的预告。每条事实与达成判定需要本章原文引用；阶段达成需要各验收项都有置信度至少 0.8 的证据，切换阶段还需显式确认。阶段数量不设固定上限。
-
-如果审核失败、模型输出中断或并发期间书籍发生变化，原正文不变。`runs` 保存普通失败时已生成的候选与审核结果。取出候选并修改后，可用 `scriptor write BOOK_ID N --file candidate.txt` 提交新章，或增加 `--rewrite` 提交最新一章的替代版本。强制杀进程不保证保存尚在内存中的候选。
-
-## 网页写作工作台与 HTTP API
+## 网页使用
 
 ```bash
 scriptor serve --port 8000
 ```
 
-默认监听 `0.0.0.0`，也可用 `--host` 指定监听地址。本机打开 **`http://127.0.0.1:8000/`** 使用网页编辑器，其他设备使用 `http://服务器IP:8000/`。`/docs` 仍提供交互式 API 文档。页面所需资源随 Python 包安装，不需要 Node.js、前端构建或第三方 CDN。
+默认监听 `0.0.0.0`。本机访问 **http://127.0.0.1:8000/**，其他设备使用 `http://服务器IP:8000/`。可用 `--host 127.0.0.1` 改为本机监听。页面随 Python 包安装，不需要前端构建或 CDN。
 
-网页中可以完成：
+### 1. 提供创作种子
 
-1. 新建作品，填写创意、风格和阶段验收条件。
-2. 在「作品设定」生成世界、人物、规则和分卷方向。
-3. 在「写作」中规划章节，查看场景安排，生成正文或手动编辑，点击「保存并审核」采纳。
-4. 在阶段面板查看逐项验收证据，完成后填写下一阶段并确认切换。
-5. 在「剧情记忆」查看已发生事实；在「运行记录」查看审核失败原因、下载或恢复候选。
-6. 查看章节历史，载入旧版本重新审核，或导出已采纳的全文。
+点击「开始一部新作品」，只需填写：
 
-未保存的编辑会暂存当前浏览器，切换章节或离开页面有提醒。「本地草稿」可载入基于旧版本的草稿。浏览器草稿不是服务器备份，清理浏览器数据后会丢失；正式正文以审核保存成功为准。生成请求完成前界面会锁定操作，避免重复提交或混用作品上下文。
+- **点子**：零散想法、世界概念、人物处境或故事开端。
+- **要点**：希望保留的设定、桥段、偏好或禁区，可选，每行一条。
+- **行文风格**：节奏、语言、视角、对话与描写偏好。
+
+保存时不会调用模型。人物、地图、阶段目标等不需要用户补全。
+
+### 2. 选择运行方式
+
+| 方式 | 行为 |
+| --- | --- |
+| **推进下一章** | 缺少方案则先构思，缺少规划则先规划；当前阶段完成后由 LLM 决定下一阶段或完结，然后生成并审核下一章 |
+| **自动运行** | 后台重复相同流程，自动处理阶段切换，直到本次章数上限、LLM 判定故事完结、用户暂停或发生失败 |
+| **暂停运行** | 等待当前构思、规划或完整写章步骤保存后停止，不丢弃已经采纳的进度 |
+
+自动运行的「最多新增章节」是本次任务的停止条件，默认 10 章，可设 1–500 章；它不是全书长度要求。关闭网页不影响服务器中的任务，重新打开作品即可查看进度。服务器停机不会自动重启付费生成；重新启动服务后，可再次运行以继续已有作品。
+
+### 3. 查看或干预创作
+
+- **作品设定**：查看 LLM 决定的人物关系与成长、地图与解锁、各体系等级与规则、升级代价和限制、整体升级与叙事策略、分卷和结局方向。
+- **阶段面板**：查看阶段目标、人物与体系发展策略、舞台、后续承接和正文验收证据。无需填写下一阶段，继续推进时 LLM 会作出决定。
+- **写作区**：查看场景安排、阅读正文，也可编辑当前阶段最新一章并重新审核。高级规划和单章生成入口仍保留。
+- **剧情记忆**：查看由已采纳正文抽取的人物状态、事件和伏笔。
+- **运行记录**：查看失败原因与候选，下载或重新载入编辑器。
+- **历史与导出**：保留已采纳版本，导出完整 Markdown 正文。
+
+未保存正文暂存当前浏览器，切换或离开有提醒。自动任务运行期间，该作品的手动修改会被锁定；需要干预时先暂停。浏览器草稿不是服务器备份。
+
+## LLM 如何组织创作
+
+```text
+点子 + 要点 + 行文风格
+           ↓
+自主构思：人物 / 地图 / 冲突 / 体系 / 升级策略 / 分卷 / 结局方向
+           ↓
+自主制定阶段目标、发展策略与正文验收条件
+           ↓
+近程章节与场景规划 → 正文 → 全文审核 → 证据记忆
+           ↑                                  ↓
+           └──── 未完成阶段：继续推进 ──────────┤
+                                              ↓
+                         阶段完成：LLM 决定下一阶段或完结
+```
+
+LLM 制定验收项，也必须根据正文证据判断是否完成。规划不算已发生事实。实质矛盾或证据不合格时，手动推进和自动运行最多再写两次；三次均未通过就停止，避免无界重试。接口或结构化输出错误会直接停止，已有正文不变。
+
+原文引文检查不能证明语义判断一定正确，置信度也是模型自评。系统提供可追踪的创作流程，不承诺模型的文学质量或永不出现设定遗漏。
+
+## 命令行
+
+`examples/book.json` 只包含点子、要点和风格：
+
+```bash
+scriptor create --input examples/book.json
+scriptor list
+
+# 每次手动推进到下一章，无需手工规划或设置目标
+scriptor step BOOK_ID
+scriptor step BOOK_ID
+
+# 自动新增最多 10 章；达到结局会提前结束
+scriptor auto BOOK_ID --chapters 10
+# Ctrl+C 请求暂停，并等待当前步骤完成；以后重跑即可继续
+
+scriptor show BOOK_ID
+scriptor runs BOOK_ID
+scriptor export BOOK_ID --output novel.md
+```
+
+也可通过 `scriptor conceive BOOK_ID` 单独构思全部方案。`plan`、`write`、`edit`、`history` 等高级命令仍然可用；旧 `{book,stage}` 建书格式和已有数据库继续兼容，但不是新版默认创作入口。
+
+## HTTP API
+
+交互文档：`/docs`。
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `POST /api/books` | 创建书籍；请求结构同 `examples/book.json` |
-| `GET /api/books` / `GET /api/books/{id}` | 列表 / 完整状态、记忆、阶段证据 |
-| `POST /api/books/{id}/bible` | 生成作品设定 |
-| `POST /api/books/{id}/plans` | `{"start":1,"count":5}` |
-| `POST /api/books/{id}/chapters/{n}/generate` | `{"rewrite":false}`；可传 `content` 提交手写正文 |
-| `PUT /api/books/{id}/chapters/{n}` | `{"content":"修订正文"}`，只允许最新一章 |
-| `GET /api/books/{id}/chapters/{n}/history` | 已采纳历史版本 |
-| `POST /api/books/{id}/stages` | `{"stage":{...},"confirm":true}`，stage 结构同 `next-stage.json` |
-| `GET /api/books/{id}/runs` | 调用记录、候选和审核 |
+| `POST /api/books` | `{"ideas":"点子","points":["要点"],"style":"行文风格"}` |
+| `GET /api/books` / `GET /api/books/{id}` | 书架 / 方案、正文、阶段与记忆 |
+| `POST /api/books/{id}/step` | 手动推进下一章，无需请求体 |
+| `POST /api/books/{id}/conceive` | 单独构思全部方案 |
+| `POST /api/books/{id}/direct` | 阶段验收后由 LLM 决定后续或完结 |
+| `POST /api/books/{id}/auto` | `{"chapters":10}`，返回 202 和后台任务 |
+| `GET /api/books/{id}/auto` | 自动任务状态、步骤和新增章节进度 |
+| `POST /api/books/{id}/auto/{job_id}/pause` | 请求暂停 |
+| `GET /api/books/{id}/runs` | 模型调用及候选记录 |
 | `GET /api/books/{id}/export` | Markdown 正文 |
 
-生成请求同步等待，CLI 与 API 都有明确的完成/失败结果。并发提交由书籍版本检查保护，失败候选可查看。数据库保存创作内容，按本地单用户工具使用。
+高级的设定、规划、单章生成、正文编辑、版本历史及人工阶段接口继续保留。所有入口共用事务与版本检查。
 
 ## 开发与验证
 
@@ -128,32 +153,14 @@ scriptor serve --port 8000
 ruff check .
 ruff format --check .
 pytest -q
-```
 
-所有测试离线运行，不需要密钥。包括使用真实 OpenAI Python SDK 的 Responses HTTP 协议测试，以及重写、证据校验、事务回滚、并发冲突、HTTP API 与 CLI 测试。尚未用真实端点验证模型质量。
-
-可选的真实浏览器烟测使用临时数据库和假模型，不会读取或修改实际书籍，不调用付费接口：
-
-```bash
+# 可选：真实浏览器烟测，使用临时库和假模型
 uv run --extra dev --with playwright python -m playwright install chromium --only-shell
 uv run --extra dev --with playwright python -m tests.browser_editor
 ```
 
-```text
-scriptor/
-  models.py       输入及模型输出契约
-  llm.py          唯一的 Responses 传输适配器
-  prompts.py      设定、规划、正文、审核任务
-  context.py      版本记忆回放、词项检索、字符预算
-  repository.py   SQLite、事务、运行记录和历史
-  service.py      写作流程与阶段状态机
-  cli.py / api.py 两个共用业务核心的入口
-  static/         无构建依赖的网页编辑器
-tests/            离线验证
-docs/             调研与架构取舍
-examples/         新书及后续阶段配置
-```
+测试覆盖自主构思、跨阶段推进、收束、修订上限、后台暂停与续跑、任务租约、旧库升级、事务、版本与 Responses 协议。浏览器烟测覆盖三字段建书、手动推进、自动运行和编辑恢复。测试不使用真实密钥，实际模型质量仍需验证。
 
-当前不自动导入旧书，不支持任意历史章修改、流式续写或向量检索。原文引用存在不代表模型的语义判断一定正确，审核和置信度不能代替作者判断；小说质量仍需实际作品评测。
+详细设计见 [架构说明](docs/architecture.md)，早期参考方案见 [调研与取舍](docs/research.md)。应用仍按单机单用户工具运行，没有多用户鉴权、语义向量库或任意历史章节依赖重写。数据库、密钥和本地书籍不进入 Git。
 
 MIT License，见 [LICENSE](LICENSE)。

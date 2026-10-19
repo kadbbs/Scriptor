@@ -20,12 +20,13 @@
     <section id="welcome" class="welcome">
       <span class="eyebrow">A SPACE FOR YOUR NEXT CHAPTER</span>
       <h1>让一个念头，<br>长成一个世界。</h1>
-      <p>从设定到场景，从正文到伏笔。<br>把创作留给你，让故事的来路始终清晰。</p>
+      <p>你给点子、要点和风格，LLM 构思整个世界。<br>逐章推进，或让故事自动生长。</p>
       <button id="welcome-create" class="primary">开始一部新作品 <span>↗</span></button>
       <div class="welcome-steps"><span>01 / 构建世界</span><span>02 / 安排故事</span><span>03 / 写下正文</span></div>
     </section>
     <section id="workspace" hidden>
-      <div class="book-heading"><div><span id="book-genre" class="eyebrow"></span><h1 id="book-title"></h1><p id="book-meta"></p></div><a id="export" class="button secondary" href="#">导出作品 ↓</a></div>
+      <div class="book-heading"><div><span id="book-genre" class="eyebrow"></span><h1 id="book-title"></h1><p id="book-meta"></p></div><div class="execution-actions"><button id="step" class="primary">推进下一章 →</button><button id="auto-open" class="secondary">自动运行</button><a id="export" class="button subtle" href="#">导出 ↓</a></div></div>
+      <div id="auto-status" class="auto-status" hidden><div><strong id="auto-label"></strong><p id="auto-info"></p></div><button id="auto-pause" class="secondary" hidden>暂停运行</button></div>
       <div class="stage-strip"><div><span id="stage-label" class="pill"></span><strong id="stage-goal"></strong></div><button id="advance" class="subtle">查看阶段目标 →</button></div>
       <nav id="tabs" class="tabs" aria-label="工作区视图">
         <button data-tab="writing" aria-current="page">写作</button><button data-tab="bible">作品设定</button><button data-tab="memory">剧情记忆</button><button data-tab="runs">运行记录</button>
@@ -35,7 +36,7 @@
         <section class="editor-panel">
           <div class="editor-toolbar"><div><span id="chapter-label" class="eyebrow">正文</span><h2 id="chapter-title">选择一个章节</h2></div><div class="toolbar-actions"><button id="draft-restore" class="subtle" hidden>本地草稿</button><button id="history" class="subtle">历史版本</button><button id="generate" class="secondary">生成正文</button><button id="save" class="primary">保存并审核</button></div></div>
           <details id="outline-details"><summary>本章场景规划 <span>展开 / 收起</span></summary><div id="outline"></div></details>
-          <label class="sr-only" for="content">章节正文</label><textarea id="content" placeholder="先生成作品设定，再规划章节。选择章节后，即可开始写作。" spellcheck="false"></textarea>
+          <label class="sr-only" for="content">章节正文</label><textarea id="content" placeholder="点击「推进下一章」，LLM 会自行构思、规划、写作与审核。也可以选择自动运行。" spellcheck="false"></textarea>
           <div class="editor-footer"><span id="save-state">尚未选择章节</span><span id="word-count">0 字符</span></div>
           <div id="review-panel" class="review-panel" hidden></div>
         </section>
@@ -47,13 +48,14 @@
   </main>
   <div id="notice" role="alert" hidden></div>
   <dialog id="book-dialog"><form id="book-form"><div class="dialog-heading"><div><span class="eyebrow">NEW STORY</span><h2>开始一部新作品</h2></div><button type="button" data-close class="icon-button" aria-label="关闭">×</button></div>
-    <div class="form-grid"><label>作品名<input name="title" required maxlength="120" placeholder="给你的世界一个名字"></label><label>题材<input name="genre" required maxlength="80" placeholder="悬疑 / 奇幻 / 都市…"></label></div>
-    <label>核心创意<textarea name="premise" required maxlength="12000" rows="3" placeholder="谁，想要什么，又被什么阻挡？"></textarea></label>
-    <div class="form-grid"><label>写作风格<input name="style" maxlength="4000" value="中文网文，场景具体，人物动机清楚"></label><label>单章目标字数<input name="chapter_words" type="number" min="300" max="10000" value="3000" required></label></div>
-    <hr><h3>第一阶段</h3><label>阶段目标<textarea name="goal" required maxlength="4000" rows="2" placeholder="故事首先要完成什么？"></textarea></label><label>舞台 / 地图<input name="setting" required maxlength="2000" placeholder="这个阶段发生在哪里？"></label><label>验收条件 <small>每行一条，以正文中可确认的事件描述</small><textarea name="acceptance" required rows="3" placeholder="主角查明来信的真实来源&#10;主角获得前往灯塔的路线"></textarea></label>
+    <p class="muted">你只需要告诉我们想看怎样的故事。主角、配角、地图、冲突、成长体系与阶段安排，都由 LLM 决定。</p>
+    <label>一些点子<textarea name="ideas" required maxlength="12000" rows="4" placeholder="例如：失踪十年的姐姐寄来了一张灯塔检修单，但那座灯塔早已从地图上消失……"></textarea></label>
+    <label>希望保留的要点 <small>可选，每行一条</small><textarea name="points" rows="3" placeholder="主角不是天选之人&#10;力量的每次提升都需要付出代价&#10;伏笔逐步揭开，不要过早解释谜底"></textarea></label>
+    <label>行文风格<textarea name="style" maxlength="4000" rows="2" placeholder="例如：克制、悬疑感强，重场景和对话，避免大段说明">中文网文，场景具体，人物动机清楚</textarea></label>
     <div class="dialog-actions"><button type="button" data-close class="secondary">取消</button><button class="primary" type="submit">创建作品 →</button></div></form></dialog>
   <dialog id="plan-dialog"><form id="plan-form"><div class="dialog-heading"><h2>规划接下来的章节</h2><button type="button" data-close class="icon-button" aria-label="关闭">×</button></div><p class="muted">生成章节目标与场景安排。从已有未写章节开始，会替换该章及后续规划。</p><div class="form-grid"><label>起始章节<input name="start" type="number" min="1" required></label><label>章节数量<input name="count" type="number" min="1" max="20" value="5" required></label></div><div class="dialog-actions"><button type="button" data-close class="secondary">取消</button><button type="submit" class="primary">生成规划</button></div></form></dialog>
-  <dialog id="stage-dialog"><div class="dialog-heading"><div><span class="eyebrow">STAGE PROGRESS</span><h2>阶段目标与证据</h2></div><button data-close class="icon-button" aria-label="关闭">×</button></div><div id="stage-progress"></div><form id="stage-form"><hr><h3>开启下一阶段</h3><p id="stage-hint" class="muted"></p><label>新阶段目标<textarea name="goal" required maxlength="4000" rows="2"></textarea></label><label>舞台 / 地图<input name="setting" required maxlength="2000"></label><label>验收条件 <small>每行一条</small><textarea name="acceptance" required rows="3"></textarea></label><label class="checkbox"><input name="confirm" type="checkbox" required>确认切换阶段，并清除未写章节的旧规划</label><div class="dialog-actions"><button type="button" data-close class="secondary">关闭</button><button id="stage-submit" type="submit" class="primary">开启下一阶段</button></div></form></dialog>
+  <dialog id="stage-dialog"><div class="dialog-heading"><div><span class="eyebrow">STAGE PROGRESS</span><h2>LLM 的阶段安排与证据</h2></div><button data-close class="icon-button" aria-label="关闭">×</button></div><div id="stage-progress"></div><form id="stage-form"><hr><p id="stage-hint" class="muted"></p><div class="dialog-actions"><button type="button" data-close class="secondary">关闭</button><button id="stage-submit" type="submit" class="primary">让 LLM 决定下一步</button></div></form></dialog>
+  <dialog id="auto-dialog"><form id="auto-form"><div class="dialog-heading"><h2>让故事自动生长</h2><button type="button" data-close class="icon-button" aria-label="关闭">×</button></div><p class="muted">LLM 会自行构思、规划、写作、审核、推进阶段，并在故事收束时结束。你可以随时请求暂停，关闭页面也不会中止后台任务。</p><label>本次最多新增章节<input name="chapters" type="number" min="1" max="500" value="10" required></label><p class="muted">这是本次运行的停止条件，不是全书章数要求。已有进度会保留；审核或接口失败时自动停止。</p><div class="dialog-actions"><button type="button" data-close class="secondary">取消</button><button type="submit" class="primary">开始自动运行</button></div></form></dialog>
   <dialog id="history-dialog"><div class="dialog-heading"><h2>章节历史版本</h2><button data-close class="icon-button" aria-label="关闭">×</button></div><div id="history-content"></div></dialog>
   <dialog id="confirm-dialog"><div class="dialog-heading"><h2 id="confirm-title">确认操作</h2></div><p id="confirm-message"></p><div class="dialog-actions"><button id="confirm-no" class="secondary">取消</button><button id="confirm-yes" class="primary">确认</button></div></dialog>
 </body>

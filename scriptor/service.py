@@ -3,13 +3,15 @@ from collections.abc import Callable
 from . import prompts
 from .config import Settings
 from .context import build_context, memory
-from .errors import Conflict, ReviewRejected, ScriptorError
+from .errors import Conflict, ReviewRejected, ScriptorError, StopRequested
 from .llm import Model
-from .models import Bible, PlanBatch, PlanRequest, Review, StageInput
-from .repository import Repository
+from .models import Bible, CreativeBlueprint, Direction, PlanBatch, PlanRequest, Review, StageInput
+from .repository import Repository, dump
 
 
 def stage_progress(book):
+    if not book["stages"]:
+        return {"stage": 0, "goal": "由 LLM 构思世界与第一阶段", "criteria": [], "achieved": False}
     stage = next(s for s in book["stages"] if s["number"] == book["stage"])
     criteria = [
         {"criterion": text, "achieved": False, "evidence": []}
@@ -33,17 +35,37 @@ def stage_progress(book):
 
 
 class StoryService:
-    def __init__(self, repo: Repository, model: Model, settings: Settings):
+    def __init__(self, repo: Repository, model: Model, settings: Settings, job_id=None):
         self.repo, self.model, self.settings = repo, model, settings
+        self.job_id = job_id
+
+    def _checkpoint(self, book_id, phase):
+        if self.job_id:
+            if self.repo.job(book_id, self.job_id)["status"] != "running":
+                raise StopRequested("自动运行已请求暂停")
+            self.repo.job_phase(self.job_id, phase)
 
     def _execute(self, book_id: str, operation: str, action: Callable):
-        run_id, snapshot = self.repo.start(book_id, operation)
+        self._checkpoint(
+            book_id,
+            {
+                "conceive": "构思完整创作方案",
+                "bible": "生成作品设定",
+                "plan": "规划后续场景",
+                "write": "生成正文并审核",
+                "edit": "审核编辑正文",
+                "direct": "决定下一阶段或收束",
+            }.get(operation, operation),
+        )
+        run_id, snapshot = self.repo.start(book_id, operation, self.job_id)
         artifacts = {}
         calls = getattr(self.model, "calls", [])
         offset = len(calls)
         try:
+            if snapshot["spec"].get("status") == "completed":
+                raise Conflict("作品已完结，不能继续修改其规划或正文")
             mutate, result = action(snapshot, artifacts)
-            self.repo.commit(snapshot, run_id, mutate, artifacts, calls[offset:])
+            self.repo.commit(snapshot, run_id, mutate, artifacts, calls[offset:], self.job_id)
         except BaseException as exc:
             # Interrupted processes retain running status; caught interrupts retain candidates too.
             message = (
@@ -63,6 +85,9 @@ class StoryService:
         return context
 
     def bible(self, book_id):
+        if self.repo.get(book_id)["spec"].get("autonomous"):
+            return self.conceive(book_id)
+
         def action(book, artifacts):
             if book["chapters"]:
                 raise Conflict("已有正文，不能直接替换世界设定；请创建新书进行分叉创作")
@@ -80,35 +105,37 @@ class StoryService:
 
         return self._execute(book_id, "bible", action)
 
-    def plan(self, book_id, request: PlanRequest):
+    def plan(self, book_id, request: PlanRequest | None = None):
         def action(book, artifacts):
             if not book["bible"]:
                 raise Conflict("请先生成作品设定")
             next_chapter = len(book["chapters"]) + 1
+            start = request.start if request else next_chapter
             last_plan = max((p["number"] for p in book["plans"]), default=next_chapter - 1)
-            if not next_chapter <= request.start <= last_plan + 1:
+            if not next_chapter <= start <= last_plan + 1:
                 raise Conflict("只能从未写章节开始规划，且不能产生章节编号缺口")
-            preceding = [p["data"] for p in book["plans"] if p["number"] < request.start][-5:]
+            preceding = [p["data"] for p in book["plans"] if p["number"] < start][-5:]
             focus = {
-                "start": request.start,
-                "count": request.count,
+                "start": start,
+                "count": request.count if request else "由你决定1至8章的近程规划，不能强行赶完阶段",
                 "stage": book["stage"],
                 "preceding_plans_not_facts": preceding,
             }
             context = self._context(book, next_chapter, focus, artifacts)
             batch = self.model.structured(prompts.EDITOR, prompts.PLAN + "\n" + context, PlanBatch)
             artifacts["plan"] = batch.model_dump()
-            expected = list(range(request.start, request.start + request.count))
-            if [ch.number for ch in batch.chapters] != expected or any(
-                ch.stage != book["stage"] for ch in batch.chapters
+            count = request.count if request else len(batch.chapters)
+            expected = list(range(start, start + count))
+            if (
+                [ch.number for ch in batch.chapters] != expected
+                or any(ch.stage != book["stage"] for ch in batch.chapters)
+                or (request is None and count > 8)
             ):
                 raise Conflict("模型返回的章节数量、编号或阶段不匹配；原大纲未改变")
 
             def mutate(conn):
                 # Replace the dependent future suffix, never append duplicate chapter numbers.
-                conn.execute(
-                    "DELETE FROM plans WHERE book_id=? AND number>=?", (book_id, request.start)
-                )
+                conn.execute("DELETE FROM plans WHERE book_id=? AND number>=?", (book_id, start))
                 conn.executemany(
                     "INSERT INTO plans(book_id,number,stage,data) VALUES (?,?,?,?)",
                     [(book_id, ch.number, ch.stage, ch.model_dump_json()) for ch in batch.chapters],
@@ -118,6 +145,135 @@ class StoryService:
 
         return self._execute(book_id, "plan", action)
 
+    def conceive(self, book_id):
+        def action(book, artifacts):
+            if book["chapters"]:
+                raise Conflict("已有正文，不能重置整部作品的创作方案")
+            context = self._context(book, 1, {"task": "自主构思完整小说方案"}, artifacts)
+            design = self.model.structured(
+                prompts.EDITOR, prompts.CONCEIVE + "\n" + context, CreativeBlueprint
+            )
+            artifacts["blueprint"] = design.model_dump()
+            roles = [c.role for c in design.bible.characters]
+            if (
+                roles.count("protagonist") != 1
+                or "supporting" not in roles
+                or "antagonist" not in roles
+            ):
+                raise Conflict("创作方案必须包含一名主角，以及配角和反派")
+            names = [c.name for c in design.bible.characters]
+            if len(names) != len(set(names)):
+                raise Conflict("创作方案中人物姓名重复")
+            stage = design.first_stage
+            if len(stage.acceptance) != len(set(stage.acceptance)):
+                raise Conflict("LLM 生成了重复的阶段验收条件")
+            spec = {
+                **book["spec"],
+                "title": design.title,
+                "genre": design.genre,
+                "chapter_words": design.chapter_words,
+                "status": "writing",
+            }
+
+            def mutate(conn):
+                conn.execute(
+                    "UPDATE books SET spec=?,bible=?,stage=1 WHERE id=?",
+                    (dump(spec), design.bible.model_dump_json(), book_id),
+                )
+                conn.execute("DELETE FROM plans WHERE book_id=?", (book_id,))
+                conn.execute("DELETE FROM stages WHERE book_id=?", (book_id,))
+                conn.execute(
+                    "INSERT INTO stages(book_id,number,spec) VALUES (?,1,?)",
+                    (book_id, stage.model_dump_json()),
+                )
+
+            return mutate, {"blueprint": design.model_dump()}
+
+        return self._execute(book_id, "conceive", action)
+
+    def direct(self, book_id):
+        def action(book, artifacts):
+            if not stage_progress(book)["achieved"]:
+                raise Conflict("当前阶段尚未完成，不能跳过阶段")
+            context = self._context(
+                book,
+                len(book["chapters"]) + 1,
+                {"progress": stage_progress(book), "task": "决定下一阶段或完结"},
+                artifacts,
+            )
+            direction = self.model.structured(
+                prompts.EDITOR, prompts.DIRECT + "\n" + context, Direction
+            )
+            artifacts["direction"] = direction.model_dump()
+            if direction.finished == (direction.next_stage is not None):
+                raise Conflict("导演决策必须在完结和新阶段之间二选一")
+            if direction.next_stage and len(set(direction.next_stage.acceptance)) != len(
+                direction.next_stage.acceptance
+            ):
+                raise Conflict("LLM 生成了重复的阶段验收条件")
+
+            def mutate(conn):
+                conn.execute(
+                    "UPDATE stages SET closed_at_chapter=? WHERE book_id=? AND number=?",
+                    (len(book["chapters"]), book_id, book["stage"]),
+                )
+                if direction.finished:
+                    spec = {
+                        **book["spec"],
+                        "status": "completed",
+                        "ending_rationale": direction.rationale,
+                    }
+                    conn.execute("UPDATE books SET spec=? WHERE id=?", (dump(spec), book_id))
+                else:
+                    conn.execute(
+                        "INSERT INTO stages(book_id,number,spec) VALUES (?,?,?)",
+                        (book_id, book["stage"] + 1, direction.next_stage.model_dump_json()),
+                    )
+                    conn.execute("UPDATE books SET stage=stage+1 WHERE id=?", (book_id,))
+                conn.execute(
+                    "DELETE FROM plans WHERE book_id=? AND number>?",
+                    (book_id, len(book["chapters"])),
+                )
+
+            return mutate, {"direction": direction.model_dump()}
+
+        return self._execute(book_id, "direct", action)
+
+    def step(self, book_id):
+        book = self.repo.get(book_id)
+        if book["spec"].get("status") == "completed":
+            return {"finished": True, "message": "作品已完结"}
+        if not book["bible"]:
+            if book["spec"].get("autonomous"):
+                self.conceive(book_id)
+            else:
+                self.bible(book_id)
+            book = self.repo.get(book_id)
+        if stage_progress(book)["achieved"]:
+            result = self.direct(book_id)
+            if result["direction"]["finished"]:
+                return {"finished": True, **result}
+            book = self.repo.get(book_id)
+        number = book["total_chapters"] + 1
+        if not any(p["number"] == number and p["stage"] == book["stage"] for p in book["plans"]):
+            self.plan(book_id)
+        feedback = None
+        for attempt in range(3):
+            try:
+                result = self.write(book_id, number, repair_notes=feedback)
+                return {"finished": False, **result}
+            except ReviewRejected as exc:
+                if attempt == 2:
+                    raise
+                failed = self.repo.runs(book_id)[0]
+                feedback = {
+                    "failure": str(exc),
+                    "contradictions": failed["artifacts"]
+                    .get("review", {})
+                    .get("contradictions", []),
+                    "instruction": "重新写出完整正文，修复以上问题；失败候选不是已发生事实",
+                }
+
     def write(
         self,
         book_id,
@@ -125,6 +281,7 @@ class StoryService:
         rewrite=False,
         content: str | None = None,
         expected_revision: int | None = None,
+        repair_notes: dict | None = None,
     ):
         def action(book, artifacts):
             if expected_revision is not None and book["revision"] != expected_revision:
@@ -139,7 +296,12 @@ class StoryService:
             plan = next((p for p in book["plans"] if p["number"] == number), None)
             if plan is None or plan["stage"] != book["stage"]:
                 raise Conflict("本章缺少当前阶段的大纲，请先规划；已结束阶段的正文不能直接重写")
-            context = self._context(book, number, plan["data"], artifacts)
+            focus = (
+                {**plan["data"], "repair_feedback_not_facts": repair_notes}
+                if repair_notes
+                else plan["data"]
+            )
+            context = self._context(book, number, focus, artifacts)
             candidate = content if content is not None else self.model.text(prompts.WRITE, context)
             artifacts["candidate"] = candidate
             if not candidate.strip() or len(candidate) > 60000:

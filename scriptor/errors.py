@@ -16,3 +16,7 @@ class ModelError(ScriptorError):
 
 class ReviewRejected(ScriptorError):
     pass
+
+
+class StopRequested(ScriptorError):
+    pass
