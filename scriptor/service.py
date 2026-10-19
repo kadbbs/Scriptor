@@ -7,6 +7,7 @@ from .context import build_context, memory
 from .errors import (
     Conflict,
     EvidenceError,
+    LiteraryError,
     ModelError,
     ReviewRejected,
     ScriptorError,
@@ -24,6 +25,7 @@ from .models import (
     SourceReview,
     StageInput,
 )
+from .narrative import PIPELINE_VERSION, NarrativeEngine
 from .repository import Repository, dump
 
 
@@ -298,9 +300,12 @@ class StoryService:
                     repair_notes=feedback,
                     content=preserved["content"] if preserved and attempt == 0 else None,
                     recovered_from=preserved["run_id"] if preserved and attempt == 0 else None,
+                    recovered_brief=preserved.get("narrative_brief")
+                    if preserved and attempt == 0
+                    else None,
                 )
                 return {"finished": False, **result}
-            except EvidenceError:
+            except (EvidenceError, LiteraryError):
                 # Review repair has its own bounded loop; rewriting the author text cannot fix it.
                 raise
             except ReviewRejected as exc:
@@ -318,6 +323,7 @@ class StoryService:
     @staticmethod
     def _draft_fingerprint(book, plan):
         context = {
+            "pipeline": PIPELINE_VERSION,
             "spec": book["spec"],
             "bible": book["bible"],
             "stage": book["stage"],
@@ -340,6 +346,7 @@ class StoryService:
         expected_revision: int | None = None,
         repair_notes: dict | None = None,
         recovered_from: str | None = None,
+        recovered_brief: dict | None = None,
     ):
         def action(book, artifacts):
             if expected_revision is not None and book["revision"] != expected_revision:
@@ -354,33 +361,58 @@ class StoryService:
             plan = next((p for p in book["plans"] if p["number"] == number), None)
             if plan is None or plan["stage"] != book["stage"]:
                 raise Conflict("本章缺少当前阶段的大纲，请先规划；已结束阶段的正文不能直接重写")
-            focus = (
-                {**plan["data"], "repair_feedback_not_facts": repair_notes}
-                if repair_notes
-                else plan["data"]
-            )
-            context = self._context(book, number, focus, artifacts)
             artifacts["draft_fingerprint"] = self._draft_fingerprint(book, plan["data"])
             if recovered_from:
                 artifacts["recovered_from"] = recovered_from
-            self._checkpoint(
-                book_id,
-                f"复用第{number}章候选，准备审核"
-                if recovered_from
-                else f"生成第{number}章正文"
-                if content is None
-                else f"审核第{number}章编辑稿",
+            if content is not None:
+                artifacts["candidate"] = content
+            engine = NarrativeEngine(
+                self.model,
+                self.settings.context_chars,
+                lambda focus, budget, label: self._context(
+                    book, number, focus, artifacts, budget=budget, label=label
+                ),
+                lambda phase: self._checkpoint(book_id, f"第{number}章 · {phase}"),
+                artifacts,
             )
-            candidate = content if content is not None else self.model.text(prompts.WRITE, context)
-            artifacts["candidate"] = candidate
-            if not candidate.strip() or len(candidate) > 60000:
-                raise ReviewRejected("正文为空或超过 60000 字符；未截断或写入正文")
-            review = self._review_candidate(book, number, plan["data"], candidate, artifacts)
+            candidate, brief, literary = engine.run(
+                plan["data"],
+                candidate=content,
+                allow_rewrite=content is None or recovered_from is not None,
+                prior_brief=recovered_brief,
+                repair_notes=repair_notes,
+            )
+            effective_plan = dict(plan["data"])
+            if brief:
+                effective_plan.update(
+                    title=brief.title,
+                    objective=brief.reader_promise,
+                    characters=brief.cast,
+                    hook=brief.ending_consequence,
+                    scenes=[
+                        {
+                            "viewpoint": brief.viewpoint,
+                            "location": scene.location,
+                            "objective": scene.desire,
+                            "conflict": scene.opposition,
+                            "change": scene.consequence,
+                        }
+                        for scene in brief.scenes
+                    ],
+                )
+            artifacts["effective_plan"] = effective_plan
+            review = self._review_candidate(book, number, effective_plan, candidate, artifacts)
+            review.narrative_state = literary.narrative_state
+            review.literary_review = literary
             current = next((ch for ch in book["chapters"] if ch["number"] == number), None)
             version = current["version"] + 1 if current else 1
-            title = plan["data"]["title"]
+            title = effective_plan["title"]
 
             def mutate(conn):
+                conn.execute(
+                    "UPDATE plans SET data=? WHERE book_id=? AND number=?",
+                    (dump(effective_plan), book_id, number),
+                )
                 values = (
                     book_id,
                     number,

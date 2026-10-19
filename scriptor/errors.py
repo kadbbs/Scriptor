@@ -28,3 +28,7 @@ class EvidenceError(ReviewRejected):
 
 class StructuredOutputError(ModelError):
     """A completed model response did not satisfy its output contract."""
+
+
+class LiteraryError(ReviewRejected):
+    """The prose needs a substantive narrative revision, not another evidence audit."""

@@ -9,6 +9,8 @@ from scriptor.models import (
     ChapterPlan,
     CreateBook,
     CreativeBlueprint,
+    LiteraryReview,
+    NarrativeBrief,
     PlanBatch,
     Review,
     SourceReview,
@@ -151,19 +153,96 @@ def review(content="林海确认了姐姐的笔迹。", achieved=True, key="hand
     )
 
 
+def narrative_brief():
+    return NarrativeBrief.model_validate(
+        {
+            "title": "旧港口",
+            "viewpoint": "林海",
+            "cast": ["林海"],
+            "opening_anchor": "林海拿着姐姐的来信站在旧港",
+            "carry_in": "需要确认笔迹以决定是否出海",
+            "reader_promise": "通过行动辨认真伪",
+            "immediate_pressure": "最后一班船即将离港",
+            "opponent_move": "船主为了自己的货物拒绝载客",
+            "irreversible_change": "修泵换船票后，林海失去返乡的钱",
+            "tangible_payoff": "确认线索但付出代价",
+            "ending_consequence": "航线出现新障碍",
+            "voice_notes": "克制悬疑",
+            "avoid_repeating": ["重复问来信真假"],
+            "scenes": [
+                {
+                    "location": "旧港",
+                    "trigger": "收到信",
+                    "desire": "确认笔迹",
+                    "opposition": "封锁",
+                    "choice": "寻找旧物核对",
+                    "consequence": "发现线索",
+                    "emotional_turn": "怀疑到动摇",
+                },
+                {
+                    "location": "船坞",
+                    "trigger": "线索指向船坞",
+                    "desire": "找到航线",
+                    "opposition": "船被锁",
+                    "choice": "用维修换通行",
+                    "consequence": "获得有限帮助",
+                    "emotional_turn": "希望伴随代价",
+                },
+            ],
+        }
+    )
+
+
+def literary_review():
+    return LiteraryReview.model_validate(
+        {
+            "verdict": "accept",
+            "causality": 4,
+            "character": 4,
+            "scene": 4,
+            "voice": 4,
+            "strengths": ["人物采取了行动"],
+            "issues": [],
+            "revision_plan": [],
+            "narrative_state": {
+                "time_place": "旧港",
+                "causal_summary": "因为来信而核对，确认线索后准备寻找航线",
+                "character_drives": [
+                    {
+                        "name": "林海",
+                        "wants_now": "找到航线",
+                        "knows": "来信线索",
+                        "relationship_change": "开始寻找帮助",
+                    }
+                ],
+                "pending_consequences": ["出海受阻"],
+                "paid_promises": ["核对来信"],
+                "next_hook": "寻找船",
+            },
+        }
+    )
+
+
 class FakeModel:
     def __init__(self):
         self.outputs = []
         self.prompts = []
         self.calls = []
         self.hook = None
+        self.director_outputs = []
+        self.literary_outputs = []
 
     def structured(self, instructions, prompt, schema):
         self.prompts.append(prompt)
         if self.hook:
             hook, self.hook = self.hook, None
             hook()
-        result = self.outputs.pop(0)
+        if schema is NarrativeBrief:
+            result = self.director_outputs.pop(0) if self.director_outputs else narrative_brief()
+        elif schema is LiteraryReview:
+            result = self.literary_outputs.pop(0) if self.literary_outputs else literary_review()
+        else:
+            result = self.outputs.pop(0)
         if isinstance(result, Exception):
             raise result
         if schema is SourceReview and isinstance(result, Review):

@@ -139,6 +139,19 @@ function renderBook() {
   }).join("") : '<div class="empty">点击「推进下一章」<br>其余交给 LLM</div>';
   renderBible(); renderMemory(); showTab(state.tab);
 }
+function literaryDetails(report) {
+  if (!report) return "";
+  const scores = [["因果", report.causality], ["人物", report.character], ["场景", report.scene], ["行文", report.voice]];
+  return `<details><summary>文学审稿 · ${scores.map(([name, score]) => `${name} ${escape(score)}/5`).join(" · ")}</summary><p class="muted">分数由模型评估，具体意见供阅读核对。</p>${report.strengths.map((s) => `<p>${escape(s)}</p>`).join("")}${report.issues.map((i) => `<p><strong>${(i.severity === "major" || i.category === "continuity") ? "需修订" : "建议"}：</strong>${escape(i.diagnosis)}<br>${escape(i.revision)}</p>`).join("")}</details>`;
+}
+function revisionDetails(art) {
+  if (!art.manuscripts || art.manuscripts.length < 2) return "";
+  return `<details><summary>查看各版正文与对应改稿意见</summary>${art.manuscripts.map((draft) => `<details><summary>${draft.revision ? `第 ${escape(draft.revision)} 次修订` : "初稿"}</summary>${(art.literary_passes || []).filter((pass) => pass.revision === draft.revision && pass.report).map((pass) => literaryDetails(pass.report)).join("")}<div class="run-content">${escape(draft.content)}</div></details>`).join("")}</details>`;
+}
+function narrativeDetails(brief) {
+  if (!brief) return "";
+  return `<details><summary>叙事导演 · 本章因果与回报</summary><p>承接：${escape(brief.carry_in)}</p><p>读者期待：${escape(brief.reader_promise)}</p>${brief.immediate_pressure ? `<p>眼前压力：${escape(brief.immediate_pressure)}</p><p>对方行动：${escape(brief.opponent_move)}</p><p>局面变化：${escape(brief.irreversible_change)}</p>` : ""}${brief.scenes.map((s, i) => `<div class="scene"><strong>${i + 1}. ${escape(s.location)}</strong><p>起因：${escape(s.trigger)}</p><p>欲望与阻力：${escape(s.desire)} · ${escape(s.opposition)}</p><p>选择：${escape(s.choice)}</p><p>后果：${escape(s.consequence)}</p></div>`).join("")}<p>本章回报：${escape(brief.tangible_payoff)}</p><p>下一章的起因：${escape(brief.ending_consequence)}</p></details>`;
+}
 function renderEditor({ restore = true } = {}) {
   const ch = current(), p = plan();
   $("#chapter-label").textContent = state.number ? `CHAPTER ${String(state.number).padStart(2, "0")} / ${ch ? `版本 ${ch.version}` : "待写作"}` : "正文";
@@ -148,7 +161,7 @@ function renderEditor({ restore = true } = {}) {
   $("#outline-details").hidden = !p;
   $("#outline").innerHTML = p ? `<p><strong>本章目标：</strong>${escape(p.data.objective)}</p>${p.data.scenes.map((s, i) => `<div class="scene"><strong>${i + 1}. ${escape(s.location)} · ${escape(s.viewpoint)}</strong><p>目标：${escape(s.objective)}</p><p>冲突：${escape(s.conflict)}</p><p>变化：${escape(s.change)}</p></div>`).join("")}<p><strong>章末钩子：</strong>${escape(p.data.hook)}</p>` : "";
   $("#review-panel").hidden = !ch;
-  $("#review-panel").innerHTML = ch ? `<h3>已采纳 · 审核摘要</h3><p>${escape(ch.review.summary)}</p><p class="muted">${ch.review.facts.length} 条事实 · 验收置信度 ${(ch.review.confidence * 100).toFixed(0)}%</p>` : "";
+  $("#review-panel").innerHTML = ch ? `<h3>已采纳 · 审核摘要</h3><p>${escape(ch.review.summary)}</p>${literaryDetails(ch.review.literary_review)}${ch.review.narrative_state ? `<p><strong>叙事接力：</strong>${escape(ch.review.narrative_state.causal_summary)}</p><p>未完后果：${ch.review.narrative_state.pending_consequences.map(escape).join("；")}</p>` : ""}<p class="muted">${ch.review.facts.length} 条事实 · 验收置信度 ${(ch.review.confidence * 100).toFixed(0)}%</p>` : "";
   if (restore && editable()) {
     try {
       const draft = JSON.parse(localStorage.getItem(draftKey()) || "null");
@@ -187,7 +200,7 @@ async function loadRuns() {
   $("#runs-content").innerHTML = state.runs.length ? state.runs.map((run, i) => {
     const art = run.artifacts, candidate = art.candidate;
     const tokens = run.calls.reduce((sum, c) => sum + (c.usage?.total_tokens || 0), 0);
-    const process = `${art.recovered_from ? '<p class="muted">复用了与当前设定和规划一致的已生成候选，未重复生成正文。</p>' : ""}${art.review_attempts?.length ? `<details><summary>审核过程 · ${art.review_attempts.length} 次</summary>${art.review_attempts.map((a) => `<p>第 ${a.attempt} 次：${({ accepted:"通过", repair_required:"修复审核结构与证据", content_rejected:"需要修订正文", started:"调用未完成" })[a.status] || escape(a.status)}${a.error ? ` · ${escape(a.error)}` : ""}</p>`).join("")}</details>` : ""}`;
+    const process = `${narrativeDetails(art.narrative_brief)}${literaryDetails(art.literary_review)}${revisionDetails(art)}${art.manuscripts?.length ? `<p class="muted">保留 ${art.manuscripts.length} 版正文 · ${art.literary_passes?.length || 0} 次文学审稿</p>` : ""}${art.recovered_from ? '<p class="muted">复用了与当前设定和规划一致的已生成候选，未重复生成正文。</p>' : ""}${art.review_attempts?.length ? `<details><summary>审核过程 · ${art.review_attempts.length} 次</summary>${art.review_attempts.map((a) => `<p>第 ${a.attempt} 次：${({ accepted:"通过", repair_required:"修复审核结构与证据", content_rejected:"需要修订正文", started:"调用未完成" })[a.status] || escape(a.status)}${a.error ? ` · ${escape(a.error)}` : ""}</p>`).join("")}</details>` : ""}`;
     return `<article class="card"><div class="run-head"><h3>${names[run.operation] || escape(run.operation)}</h3><span class="pill ${run.status === "failed" ? "failure" : ""}">${({ succeeded: "已完成", failed: "未采纳", running: "执行中或曾中断" })[run.status] || escape(run.status)}</span></div><small>${escape(run.created_at)} UTC · ${tokens.toLocaleString()} tokens</small>${run.error ? `<p class="failure">${escape(run.error)}</p>` : ""}${process}${art.review ? `<details><summary>审核结果</summary><div class="run-content">${escape(art.review.summary)}${art.review.contradictions.length ? `\n矛盾：${escape(art.review.contradictions.join("；"))}` : ""}\n${art.review.criteria.map((c) => `${c.achieved ? "✓" : "○"} ${escape(c.criterion)}\n${c.evidence.map(escape).join("\n")}`).join("\n")}</div></details>` : ""}${candidate ? `<details><summary>候选正文</summary><div class="run-content">${escape(candidate)}</div></details><div class="run-actions"><button class="secondary" data-recover="${i}">载入当前章节编辑器</button><button class="subtle" data-download-run="${i}">下载候选</button></div>` : ""}</article>`;
   }).join("") : '<div class="empty">还没有运行记录。完成一次生成后，可以在这里查看。</div>';
 }

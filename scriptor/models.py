@@ -141,6 +141,69 @@ class Fact(Contract):
     evidence: Text
 
 
+class CausalScene(Contract):
+    location: Text
+    trigger: Text
+    desire: Text
+    opposition: Text
+    choice: Text
+    consequence: Text
+    emotional_turn: Text
+
+
+class NarrativeBrief(Contract):
+    title: Text
+    viewpoint: Text
+    cast: list[Text] = Field(min_length=1)
+    opening_anchor: Text
+    carry_in: Text
+    reader_promise: Text
+    immediate_pressure: Text
+    opponent_move: Text
+    irreversible_change: Text
+    scenes: list[CausalScene] = Field(min_length=2, max_length=4)
+    tangible_payoff: Text
+    ending_consequence: Text
+    voice_notes: Text
+    avoid_repeating: list[Text]
+
+
+class CharacterDrive(Contract):
+    name: Text
+    wants_now: Text
+    knows: Text
+    relationship_change: Text
+
+
+class NarrativeState(Contract):
+    time_place: Text
+    causal_summary: Text
+    character_drives: list[CharacterDrive]
+    pending_consequences: list[Text]
+    paid_promises: list[Text]
+    next_hook: Text
+
+
+class LiteraryIssue(Contract):
+    category: Literal["causality", "motivation", "continuity", "stagnation", "voice", "clarity"]
+    severity: Literal["major", "minor"]
+    source_ids: list[int]
+    diagnosis: Text
+    revision: Text
+
+
+class LiteraryReview(Contract):
+    verdict: Literal["accept", "revise"]
+    causality: int = Field(ge=1, le=5)
+    character: int = Field(ge=1, le=5)
+    scene: int = Field(ge=1, le=5)
+    voice: int = Field(ge=1, le=5)
+    strengths: list[Text]
+    issues: list[LiteraryIssue]
+    revision_plan: list[Text]
+    narrative_state: NarrativeState
+
+
 class Criterion(Contract):
     criterion: Text
     achieved: bool = Field(strict=True)
@@ -153,6 +216,8 @@ class Review(Contract):
     contradictions: list[Text]
     criteria: list[Criterion]
     confidence: float = Field(ge=0, le=1)
+    narrative_state: NarrativeState | None = None
+    literary_review: LiteraryReview | None = None
 
 
 class SourceFact(Contract):

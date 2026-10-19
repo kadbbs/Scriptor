@@ -43,18 +43,29 @@ def build_context(book, before: int, budget: int, focus=None):
             return True
         return False
 
-    # The immediate predecessor is required, never replaced with a future summary.
+    # Give the author actual prose and unfinished consequences, not just a factual digest.
     if chapters:
         last = chapters[-1]
+        previous = last["content"] if len(last["content"]) <= 12000 else last["content"][-8000:]
         if not add(
-            "上一章摘要与结尾",
+            "上一章正文与叙事接力",
             {
                 "number": last["number"],
                 "summary": last["review"]["summary"],
-                "ending": last["content"][-1000:],
+                "prose": previous,
+                "prose_is_complete": len(previous) == len(last["content"]),
+                "narrative_state": last["review"].get("narrative_state"),
             },
         ):
-            raise ScriptorError("上下文预算不足以容纳上一章，请增加 SCRIPTOR_CONTEXT_CHARS")
+            raise ScriptorError(
+                "上下文预算不足以容纳上一章正文与衔接，请增加 SCRIPTOR_CONTEXT_CHARS"
+            )
+    for chapter in chapters[-3:-1]:
+        if chapter["review"].get("narrative_state"):
+            add(
+                "近期因果与人物变化",
+                {"number": chapter["number"], **chapter["review"]["narrative_state"]},
+            )
     query = terms(dump(focus) + (stage["spec"]["goal"] if stage else book["spec"]["premise"]))
     facts = memory(chapters)
     facts.sort(

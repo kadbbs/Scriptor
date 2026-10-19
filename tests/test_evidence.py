@@ -67,7 +67,7 @@ def test_review_repair_keeps_the_same_manuscript(setup):
     model.outputs += [text, source_review(999), source_review()]
     result = svc.step(book_id)
     assert result["content"] == text
-    assert len(model.prompts) == 5  # bible, plan, author, reviewer, reviewer repair
+    assert len(model.prompts) == 7  # setup, director, author, literary editor, two evidence audits
     assert render_sources(sources_for(text)) in model.prompts[-1]
     assert "上次审核结构问题" in model.prompts[-1]
     run = svc.repo.runs(book_id)[0]

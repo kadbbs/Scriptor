@@ -63,7 +63,9 @@ def test_step_conceives_plans_and_writes_without_user_planning(autonomous):
     model.outputs = [blueprint(), *chapter_outputs()]
     assert svc.step(book_id)["number"] == 1
     assert svc.inspect(book_id)["progress"]["achieved"]
-    assert len(model.prompts) == 4
+    assert (
+        len(model.prompts) == 6
+    )  # conceive, plan, director, author, literary editor, fact auditor
 
 
 def test_llm_directs_next_stage_then_decides_when_to_finish(autonomous):

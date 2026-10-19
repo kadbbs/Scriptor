@@ -227,7 +227,11 @@ class Repository:
                 and artifacts.get("failure_kind") in ("review_structure", "model", "paused")
                 and artifacts.get("candidate", "").strip()
             ):
-                return {"run_id": row["id"], "content": artifacts["candidate"]}
+                return {
+                    "run_id": row["id"],
+                    "content": artifacts["candidate"],
+                    "narrative_brief": artifacts.get("narrative_brief"),
+                }
         return None
 
     @staticmethod
