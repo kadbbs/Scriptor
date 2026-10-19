@@ -244,3 +244,91 @@ def test_idea_api_and_background_execution(tmp_path):
         assert client.get(base + "/auto").json()[0]["completed"] == 1
         assert client.get(base).json()["total_chapters"] == 1
         assert client.post(base + "/auto", json={"chapters": 0}).status_code == 422
+
+
+def test_auto_recovers_from_temporary_provider_failure(autonomous):
+    from dataclasses import replace
+
+    from scriptor.errors import TransientModelError
+
+    svc, model, book_id = autonomous
+    model.outputs = [TransientModelError("HTTP 503"), blueprint(), *chapter_outputs()]
+    runner = AutoRunner(svc.repo, lambda: model, replace(svc.settings, retry_delay=0))
+    try:
+        job = runner.start(book_id, 1)
+        done = wait_job(svc.repo, book_id, job["id"])
+        assert done["status"] == "completed" and done["completed"] == 1
+        assert svc.repo.get(book_id)["total_chapters"] == 1
+        assert len([r for r in svc.repo.runs(book_id) if r["status"] == "failed"]) == 1
+    finally:
+        runner.close()
+
+
+def test_temporary_retries_reuse_manuscript_after_review_failure(autonomous):
+    from dataclasses import replace
+
+    from scriptor.errors import TransientModelError
+
+    svc, model, book_id = autonomous
+    content = "林海确认了姐姐的笔迹。"
+    model.outputs = [
+        blueprint(),
+        PlanBatch(chapters=[plan()]),
+        content,
+        TransientModelError("HTTP 503"),
+        review(content),
+    ]
+    runner = AutoRunner(svc.repo, lambda: model, replace(svc.settings, retry_delay=0))
+    try:
+        job = runner.start(book_id, 1)
+        done = wait_job(svc.repo, book_id, job["id"])
+        assert done["status"] == "completed" and done["completed"] == 1
+        runs = [r for r in svc.repo.runs(book_id) if r["operation"] in ("write", "edit")]
+        assert runs[0]["artifacts"]["recovered_from"] == runs[1]["id"]
+        assert len(svc.repo.history(book_id, 1)) == 1
+        assert not model.outputs
+    finally:
+        runner.close()
+
+
+def test_persistent_503_exhausts_bounded_retries(autonomous):
+    from dataclasses import replace
+
+    from scriptor.errors import TransientModelError
+
+    svc, model, book_id = autonomous
+    model.outputs = [TransientModelError("HTTP 503")] * 3
+    runner = AutoRunner(svc.repo, lambda: model, replace(svc.settings, retry_delay=0))
+    try:
+        job = runner.start(book_id, 20)
+        failed = wait_job(svc.repo, book_id, job["id"])
+        assert failed["status"] == "failed" and failed["completed"] == 0
+        assert len(svc.repo.runs(book_id)) == 3
+        assert not model.outputs
+        assert svc.repo.get(book_id)["bible"] is None
+    finally:
+        runner.close()
+
+
+def test_pause_during_retry_wait_is_prompt_and_does_not_start_another_call(autonomous):
+    from dataclasses import replace
+
+    from scriptor.errors import TransientModelError
+
+    svc, model, book_id = autonomous
+    model.outputs = [TransientModelError("HTTP 503", retry_after=60), blueprint()]
+    runner = AutoRunner(svc.repo, lambda: model, replace(svc.settings, retry_delay=60))
+    try:
+        job = runner.start(book_id, 20)
+        deadline = time.monotonic() + 3
+        while "秒后重试" not in svc.repo.job(book_id, job["id"])["phase"]:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        started = time.monotonic()
+        svc.repo.pause_job(book_id, job["id"])
+        paused = wait_job(svc.repo, book_id, job["id"])
+        assert paused["status"] == "paused" and paused["completed"] == 0
+        assert time.monotonic() - started < 1
+        assert len(model.outputs) == 1
+    finally:
+        runner.close()

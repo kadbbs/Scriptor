@@ -217,3 +217,78 @@ def test_anthropic_health_and_readonly_need_no_credentials(tmp_path):
             "api_format": "messages",
         }
         assert client.get("/api/books").json() == []
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504, 529])
+def test_temporary_errors_are_retryable_and_record_safe_diagnostics(status):
+    from scriptor.errors import TransientModelError
+
+    model = provider(
+        lambda req: httpx.Response(
+            status,
+            headers={"request-id": "req_safe_123", "retry-after": "12"},
+            json={"type": "error", "error": {"type": "api_error", "message": "secret body"}},
+        )
+    )
+    with pytest.raises(TransientModelError) as exc:
+        model.text("writer", "write")
+    assert exc.value.retry_after == 12
+    assert f"HTTP {status}" in str(exc.value)
+    assert "req_safe_123" in str(exc.value)
+    assert "secret body" not in str(exc.value)
+    assert "结构化输出支持" not in str(exc.value)
+    assert model.calls[0]["http_status"] == status
+    assert model.calls[0]["status"] == "failed"
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_permanent_errors_are_not_background_retryable(status):
+    from scriptor.errors import TransientModelError
+
+    model = provider(
+        lambda req: httpx.Response(
+            status,
+            json={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "private"},
+            },
+        )
+    )
+    with pytest.raises(ModelError) as exc:
+        model.text("writer", "write")
+    assert not isinstance(exc.value, TransientModelError)
+
+
+def test_retry_after_is_bounded_and_request_id_never_echoes_key():
+    from scriptor.errors import TransientModelError
+
+    model = provider(
+        lambda req: httpx.Response(
+            503,
+            headers={
+                "request-id": "test-anthropic-key",
+                "retry-after": "999999",
+            },
+            json={"type": "error", "error": {"type": "api_error", "message": "private"}},
+        )
+    )
+    model.settings = Settings(api_key="test-anthropic-key")
+    with pytest.raises(TransientModelError) as exc:
+        model.text("writer", "write")
+    assert exc.value.retry_after == 60
+    assert "test-anthropic-key" not in str(exc.value)
+    assert model.calls[0]["request_id"] is None
+
+
+def test_transient_network_error_is_classified_without_exposing_details():
+    from scriptor.errors import TransientModelError
+
+    def handler(req):
+        raise httpx.ConnectError("secret-connection-detail", request=req)
+
+    model = provider(handler)
+    with pytest.raises(TransientModelError) as exc:
+        model.text("writer", "write")
+    assert "secret-connection-detail" not in str(exc.value)
+    assert "network" in str(exc.value)
+    assert model.calls[0]["status"] == "failed"

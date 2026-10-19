@@ -114,3 +114,14 @@ def test_provider_failure_has_no_chat_fallback_or_secret_body():
         model.text("writer", "write")
     assert "secret-provider-body" not in str(exc.value)
     assert captured == ["/v1/responses"]
+
+
+def test_openai_503_is_also_background_retryable():
+    from scriptor.errors import TransientModelError
+
+    model = provider(lambda req: httpx.Response(503, json={"error": {"message": "private"}}))
+    with pytest.raises(TransientModelError) as exc:
+        model.text("writer", "write")
+    assert "HTTP 503" in str(exc.value)
+    assert "private" not in str(exc.value)
+    assert model.calls[0]["provider"] == "openai"

@@ -20,6 +20,29 @@ from scriptor.repository import Repository
 from scriptor.service import StoryService
 
 
+@pytest.fixture(autouse=True)
+def isolate_user_configuration(monkeypatch):
+    """Unit tests never load local credentials or issue paid requests from .env."""
+    monkeypatch.setattr("scriptor.config.load_dotenv", lambda **kwargs: False)
+    for key in (
+        "SCRIPTOR_PROVIDER",
+        "SCRIPTOR_DB",
+        "SCRIPTOR_TIMEOUT",
+        "SCRIPTOR_MAX_OUTPUT_TOKENS",
+        "SCRIPTOR_CONTEXT_CHARS",
+        "SCRIPTOR_STRUCTURED_OUTPUT",
+        "SCRIPTOR_AUTO_RETRIES",
+        "SCRIPTOR_RETRY_DELAY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
 def bible():
     return Bible.model_validate(
         {

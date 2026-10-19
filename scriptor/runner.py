@@ -1,8 +1,9 @@
 """Durable automatic runs; each chapter uses the same workflow as manual stepping."""
 
 import threading
+import time
 
-from .errors import ScriptorError, StopRequested
+from .errors import ScriptorError, StopRequested, TransientModelError
 from .service import StoryService
 
 
@@ -22,6 +23,30 @@ class AutoRunner:
             self._threads[job["id"]] = thread
             thread.start()
             return job
+
+    def _wait_for_retry(self, job, delay):
+        deadline = time.monotonic() + delay
+        while True:
+            if self.repo.job(job["book_id"], job["id"])["status"] != "running":
+                raise StopRequested("自动运行已请求暂停")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 0.2))
+
+    def _step_with_retries(self, service, job):
+        for attempt in range(self.settings.auto_retries + 1):
+            try:
+                return service.step(job["book_id"])
+            except TransientModelError as exc:
+                if attempt == self.settings.auto_retries:
+                    raise
+                delay = min(60, max(self.settings.retry_delay * 2**attempt, exc.retry_after or 0))
+                self.repo.job_phase(
+                    job["id"],
+                    f"上游暂不可用，{delay:g} 秒后重试（{attempt + 1}/{self.settings.auto_retries}）：{exc}",
+                )
+                self._wait_for_retry(job, delay)
 
     def _run(self, job):
         stopped = threading.Event()
@@ -45,7 +70,7 @@ class AutoRunner:
             while completed < job["target"]:
                 if self.repo.job(job["book_id"], job["id"])["status"] != "running":
                     break
-                result = service.step(job["book_id"])
+                result = self._step_with_retries(service, job)
                 finished = result["finished"]
                 if finished:
                     break

@@ -18,6 +18,8 @@ class Settings:
     structured_output: bool = True
     context_chars: int = 28000
     provider: str = "openai"
+    auto_retries: int = 2
+    retry_delay: float = 5
 
     def __post_init__(self):
         if not self.base_url:
@@ -41,6 +43,8 @@ class Settings:
         try:
             result = cls(
                 provider=provider,
+                auto_retries=int(os.getenv("SCRIPTOR_AUTO_RETRIES", "2")),
+                retry_delay=float(os.getenv("SCRIPTOR_RETRY_DELAY", "5")),
                 database=Path(os.getenv("SCRIPTOR_DB", "data/scriptor.db")),
                 api_key=os.getenv(f"{prefix}_API_KEY", ""),
                 base_url=os.getenv(f"{prefix}_BASE_URL", default_url).rstrip("/"),
@@ -54,4 +58,8 @@ class Settings:
             raise ScriptorError("配置中的数字格式无效") from exc
         if result.timeout <= 0 or result.max_output_tokens < 256 or result.context_chars < 6000:
             raise ScriptorError("timeout 必须 > 0，输出上限 >= 256，上下文字符预算 >= 6000")
+        if not 0 <= result.auto_retries <= 5 or not 0 <= result.retry_delay <= 60:
+            raise ScriptorError(
+                "SCRIPTOR_AUTO_RETRIES 必须为 0–5，SCRIPTOR_RETRY_DELAY 必须为 0–60 秒"
+            )
         return result

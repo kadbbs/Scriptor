@@ -55,6 +55,8 @@ ANTHROPIC_MODEL=你有权限使用的Claude模型ID
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API 根路径，不追加 `/responses` |
 | `SCRIPTOR_DB` | `data/scriptor.db` | SQLite 数据库 |
 | `SCRIPTOR_TIMEOUT` | `180` | 单次请求超时秒数；SDK 最多重试两次 |
+| `SCRIPTOR_AUTO_RETRIES` | `2` | 后台遇到网络故障、429、5xx 时额外重试当前推进步骤的次数，0–5；设为 0 可关闭 |
+| `SCRIPTOR_RETRY_DELAY` | `5` | 后台重试的起始等待秒数，按指数增加，每次最多 60 秒；等待期间可暂停 |
 | `SCRIPTOR_MAX_OUTPUT_TOKENS` | `12000` | 单次输出 token 上限 |
 | `SCRIPTOR_STRUCTURED_OUTPUT` | `true` | 严格 JSON Schema；设为 `false` 时在选中的 API 上请求 JSON 文本并本地校验 |
 | `SCRIPTOR_CONTEXT_CHARS` | `28000` | 上下文字符预算，不是 token 数；审核包含完整正文 |
@@ -196,6 +198,8 @@ uv run --extra dev --with playwright python -m tests.browser_editor
 0.6.0 在 Python 3.10、3.12 各通过 81 项离线测试及 Chromium 烟测。Anthropic 使用真实 SDK 和模拟 HTTP 响应验证了协议、错误处理、Schema 与完整写章流程；本机未配置 Anthropic 凭据，尚未验证真实 Claude 端点。
 
 0.4.1 还在隔离数据库副本上使用本机配置的真实模型，重新审核失败候选并连续自动新增 2 章；该目标作品的 25 条事实与验收引用均通过原文校验。复现原因、修复流程及验证边界见 [自动运行修复验证](docs/validation.md)。
+
+503、连接失败与后台等待重试的排查方式见 [接口故障排查](docs/provider-troubleshooting.md)。
 
 详细设计见 [架构说明](docs/architecture.md)，早期参考方案见 [调研与取舍](docs/research.md)。应用仍按单机单用户工具运行，没有多用户鉴权、语义向量库或任意历史章节依赖重写。数据库、密钥和本地书籍不进入 Git。
 

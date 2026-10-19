@@ -1,15 +1,18 @@
 """Explicit provider transports with shared local contract validation."""
 
 import json
+import math
+import re
 from typing import Protocol, TypeVar
 
 from anthropic import Anthropic, transform_schema
+from anthropic import APIConnectionError as AnthropicConnectionError
 from anthropic import APIError as AnthropicAPIError
-from openai import APIError, OpenAI
+from openai import APIConnectionError, APIError, OpenAI
 from pydantic import BaseModel, ValidationError
 
 from .config import Settings
-from .errors import ModelError, StructuredOutputError
+from .errors import ModelError, StructuredOutputError, TransientModelError
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -29,6 +32,71 @@ class _ModelClient:
     def close(self):
         if self._client is not None:
             self._client.close()
+
+    def _api_failure(self, provider, exc):
+        code = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        headers = response.headers if response is not None else {}
+        request_id = (
+            getattr(exc, "request_id", None)
+            or headers.get("request-id")
+            or headers.get("x-request-id")
+        )
+        if request_id:
+            request_id = str(request_id)
+            if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", request_id) or (
+                self.settings.api_key and self.settings.api_key in request_id
+            ):
+                request_id = None
+        retry_after = None
+        try:
+            value = (
+                float(headers["retry-after"])
+                if "retry-after" in headers
+                else float(headers["retry-after-ms"]) / 1000
+            )
+            if math.isfinite(value) and value >= 0:
+                retry_after = min(value, 60)
+        except (KeyError, ValueError, TypeError, OverflowError):
+            pass
+        self.calls.append(
+            {
+                "provider": provider,
+                "model": self.settings.model,
+                "status": "failed",
+                "http_status": code,
+                "request_id": request_id,
+                "usage": None,
+                "error_type": type(exc).__name__,
+            }
+        )
+        name = "Anthropic" if provider == "anthropic" else "Responses"
+        status = f"HTTP {code}" if code is not None else "network"
+        suffix = f"；请求编号 {request_id}" if request_id else ""
+        if code == 429:
+            message = f"{name} 请求被限流（{status}）；请稍后重试或检查服务配额"
+        elif code is not None and code >= 500:
+            message = f"{name} 上游服务暂不可用（{status}）；请稍后重试或检查中转服务的生成线路状态"
+        elif isinstance(exc, (APIConnectionError, AnthropicConnectionError)):
+            message = f"{name} 连接失败或超时（{status}）；请检查网络或稍后重试"
+        elif code == 401:
+            message = f"{name} 认证失败（{status}）；请检查所选提供商的 API 密钥"
+        elif code == 403:
+            message = f"{name} 请求被拒绝（{status}）；请检查账号与模型权限"
+        elif code == 404:
+            message = f"{name} 端点或模型不存在（{status}）；请核对 BASE_URL 和模型 ID"
+        elif code in (400, 422):
+            message = f"{name} 请求参数被拒绝（{status}）；请检查模型、输出上限及结构化输出支持"
+        else:
+            message = f"{name} 请求失败（{type(exc).__name__}, {status}）"
+        temporary = (
+            code == 429
+            or (code is not None and code >= 500)
+            or isinstance(exc, (APIConnectionError, AnthropicConnectionError))
+        )
+        if temporary:
+            return TransientModelError(message + suffix, retry_after=retry_after)
+        return ModelError(message + suffix)
 
     def text(self, instructions: str, prompt: str) -> str:
         return self._request(instructions, prompt)
@@ -83,10 +151,7 @@ class ResponsesModel(_ModelClient):
                 **kwargs,
             )
         except APIError as exc:
-            code = getattr(exc, "status_code", None)
-            raise ModelError(
-                f"Responses 请求失败（{type(exc).__name__}, HTTP {code or 'network'}）；请检查端点、模型和 Schema 支持"
-            ) from exc
+            raise self._api_failure("openai", exc) from exc
         usage = getattr(response, "usage", None)
         self.calls.append(
             {
@@ -144,10 +209,7 @@ class AnthropicModel(_ModelClient):
                 **kwargs,
             )
         except AnthropicAPIError as exc:
-            code = getattr(exc, "status_code", None)
-            raise ModelError(
-                f"Anthropic 请求失败（{type(exc).__name__}, HTTP {code or 'network'}）；请检查端点、模型和结构化输出支持"
-            ) from exc
+            raise self._api_failure("anthropic", exc) from exc
         usage = response.usage.model_dump()
         usage["total_tokens"] = (
             usage.get("input_tokens", 0)
