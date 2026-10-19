@@ -4,7 +4,7 @@
 
 书名、题材、主角、配角、反派、地图、冲突、成长体系、升级策略、分卷和阶段安排，都由 LLM 自主构思。用户可以逐章手动推进，也可以开启后台自动运行；无需提前填写阶段目标或验收条件。
 
-所有模型调用使用 **Responses API**。网页、CLI 和 HTTP API 共用同一写作核心，SQLite 保存创作方案、正文、证据记忆、版本历史和自动任务进度。
+支持 **OpenAI Responses API** 和 **Anthropic Messages API**，通过环境变量选择提供商。网页、CLI 和 HTTP API 共用同一写作核心，SQLite 保存创作方案、正文、证据记忆、版本历史和自动任务进度。
 
 ## 界面预览
 
@@ -26,25 +26,42 @@ cp .env.example .env
 填写 `.env`：
 
 ```dotenv
+SCRIPTOR_PROVIDER=openai
 OPENAI_API_KEY=你的密钥
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=你有权限使用且支持Responses的模型
 ```
 
+使用 Anthropic 时，改为：
+
+```dotenv
+SCRIPTOR_PROVIDER=anthropic
+ANTHROPIC_API_KEY=你的密钥
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_MODEL=你有权限使用的Claude模型ID
+```
+
+重启服务后，网页、CLI、自动运行和构思／写作／审核全部使用选中的提供商。两组密钥与模型配置独立，切换不会读取另一组配置；已有作品和数据库继续共用。
+
 也可通过 `uv sync --locked --extra dev` 安装锁定依赖。环境变量优先于 `.env`。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
+| `SCRIPTOR_PROVIDER` | `openai` | `openai` 或 `anthropic`，不自动切换 |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | 空 | Anthropic 模式下生成时必填 |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | SDK 根地址，不追加 `/v1/messages`；可配置 Messages 兼容服务 |
 | `OPENAI_API_KEY` | 空 | 生成时必填；保存点子和读取作品不需要 |
 | `OPENAI_MODEL` | 空 | 显式选择可用模型，不绑定厂商 |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API 根路径，不追加 `/responses` |
 | `SCRIPTOR_DB` | `data/scriptor.db` | SQLite 数据库 |
 | `SCRIPTOR_TIMEOUT` | `180` | 单次请求超时秒数；SDK 最多重试两次 |
 | `SCRIPTOR_MAX_OUTPUT_TOKENS` | `12000` | 单次输出 token 上限 |
-| `SCRIPTOR_STRUCTURED_OUTPUT` | `true` | 严格 JSON Schema；设为 `false` 时仍使用 Responses，仅本地校验 JSON |
+| `SCRIPTOR_STRUCTURED_OUTPUT` | `true` | 严格 JSON Schema；设为 `false` 时在选中的 API 上请求 JSON 文本并本地校验 |
 | `SCRIPTOR_CONTEXT_CHARS` | `28000` | 上下文字符预算，不是 token 数；审核包含完整正文 |
 
-第三方服务必须实现 `POST /responses`。仅兼容 Chat Completions 不足以使用本项目，不会自动回退到其他 API。
+OpenAI 模式要求服务实现 `POST /responses`；Anthropic 模式要求实现 `POST /v1/messages`。默认使用原生 JSON Schema 输出，Anthropic 通过官方 SDK 转换不支持的 Schema 约束，再按完整 Pydantic 合约本地验证。若兼容端点不支持原生结构化输出，可显式设置 `SCRIPTOR_STRUCTURED_OUTPUT=false`。不会自动回退 API 或更换提供商。
+
+Anthropic 接入依据[官方结构化输出文档](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)。截断、拒绝、工具调用和未完成响应不会采纳为正文；调用记录保留提供商、模型及 token 用量。
 
 ## 网页使用
 
@@ -174,7 +191,9 @@ uv run --extra dev --with playwright python -m playwright install chromium --onl
 uv run --extra dev --with playwright python -m tests.browser_editor
 ```
 
-测试覆盖自主构思、跨阶段推进、收束、修订上限、后台暂停与续跑、任务租约、旧库升级、事务、版本与 Responses 协议。浏览器烟测覆盖三字段建书、手动推进、自动运行和编辑恢复。离线测试不使用真实密钥；真实模型的小样本阅读验证与局限见 [叙事流程验证](docs/narrative-evaluation.md)。
+测试覆盖自主构思、跨阶段推进、收束、修订上限、后台暂停与续跑、任务租约、旧库升级、事务、版本、Responses 与 Anthropic Messages 协议。浏览器烟测覆盖三字段建书、手动推进、自动运行和编辑恢复。离线测试不使用真实密钥；真实模型的小样本阅读验证与局限见 [叙事流程验证](docs/narrative-evaluation.md)。
+
+0.6.0 在 Python 3.10、3.12 各通过 81 项离线测试及 Chromium 烟测。Anthropic 使用真实 SDK 和模拟 HTTP 响应验证了协议、错误处理、Schema 与完整写章流程；本机未配置 Anthropic 凭据，尚未验证真实 Claude 端点。
 
 0.4.1 还在隔离数据库副本上使用本机配置的真实模型，重新审核失败候选并连续自动新增 2 章；该目标作品的 25 条事实与验收引用均通过原文校验。复现原因、修复流程及验证边界见 [自动运行修复验证](docs/validation.md)。
 

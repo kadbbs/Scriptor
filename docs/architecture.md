@@ -23,7 +23,9 @@ StoryService.step（完成下一章或决定完结）
 Repository → SQLite
 
 AutoRunner → 重复同一个 step，提供后台任务、暂停和心跳
-ResponsesModel → 所有模型请求统一 POST /responses
+create_model → 根据 SCRIPTOR_PROVIDER 选择传输
+  ├─ ResponsesModel → POST /responses
+  └─ AnthropicModel → POST /v1/messages
 ```
 
 手动与自动模式采用同一流程。手动模式每次点击推进到一章完成；自动模式重复推进，用户不再需要填写下一阶段。到达正文证据支持的阶段里程碑后，由 `Direction` 判断下一阶段或完结；单纯的大纲计划不能触发验收。
@@ -90,3 +92,13 @@ CLI 自动运行使用同一任务机制，终端保持运行；Ctrl+C 请求暂
 审稿不是可靠的客观裁判。真实试写中出现过“实际仍拖沓但自评通过”的样本，因此提示包含停滞反例，并要求检查相对前章的净变化；仍需人工阅读和更长程评估。
 
 `Review` 新增可选 `literary_review`、`narrative_state`，旧 JSON 兼容，无需数据库迁移。叙事状态记录实际事件而非计划。`runs.artifacts` 保存导演方案、每版完整稿、每次审稿及最终结果；创作指纹包含流程版本，防止自动恢复旧流程的低质量候选。
+
+## Anthropic 接入（0.6）
+
+提供商在启动时显式选择。`Settings.from_env` 分别读取 `OPENAI_*` 或 `ANTHROPIC_*`，两组配置不串用；`create_model` 用于网页请求、CLI、后台任务和真实模型复测脚本。旧配置未设置 `SCRIPTOR_PROVIDER` 时继续使用 OpenAI Responses。
+
+两个适配器共享 `text/structured/close` 合约与完整 Pydantic 本地校验。Anthropic 原生结构化输出使用 `output_config.format`，Schema 先经过官方 SDK 的 `transform_schema`，将不受支持的长度、数值等约束移入描述；本地验证继续执行原始约束。显式 JSON 兼容模式仅关闭远端约束，不跳过本地验证。
+
+只采纳 `end_turn` 完成的文本，忽略 thinking 块，拒绝截断、拒绝、工具调用和空响应。token 总数计入输入、输出及缓存输入；网络与 HTTP 错误统一包装，不向页面暴露响应正文或密钥。SDK 最多重试两次，不自动切换提供商。健康检查返回实际 `provider/api_format`。
+
+真实 Anthropic Python SDK + HTTP MockTransport 测试覆盖请求路径、认证头、system/messages、Schema 转换、本地校验、各种停止原因、错误信息、用量，以及导演→主笔→文学审稿→事实审核的完整写章流程。本机未配置 Anthropic 密钥和模型，因此没有声称已完成真实 Claude 端点验证。

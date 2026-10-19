@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from .config import Settings
 from .errors import ScriptorError
-from .llm import ResponsesModel
+from .llm import create_model
 from .models import CreateBook, IdeaInput, PlanRequest, StageInput
 from .repository import Repository
 from .runner import AutoRunner
@@ -16,7 +16,7 @@ from .service import StoryService
 
 
 def parser():
-    root = argparse.ArgumentParser(prog="scriptor", description="Responses API 长篇小说工作流")
+    root = argparse.ArgumentParser(prog="scriptor", description="OpenAI / Anthropic 长篇小说工作流")
     commands = root.add_subparsers(dest="command", required=True)
     create = commands.add_parser("create", help="从点子、要点和风格 JSON 创建作品")
     create.add_argument("--input", type=Path, required=True)
@@ -67,7 +67,7 @@ def main(argv=None):
             uvicorn.run(create_app(settings), host=args.host, port=args.port)
             return 0
         repo = Repository(settings.database)
-        model = ResponsesModel(settings)
+        model = create_model(settings)
         svc = StoryService(repo, model, settings)
         if args.command == "create":
             raw = json.loads(args.input.read_text(encoding="utf-8"))
@@ -87,7 +87,7 @@ def main(argv=None):
         elif args.command == "direct":
             result = svc.direct(args.book_id)
         elif args.command == "auto":
-            runner = AutoRunner(repo, lambda: ResponsesModel(settings), settings)
+            runner = AutoRunner(repo, lambda: create_model(settings), settings)
             job = runner.start(args.book_id, args.chapters)
             try:
                 try:

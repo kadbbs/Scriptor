@@ -11,22 +11,40 @@ from .errors import ScriptorError
 class Settings:
     database: Path = Path("data/scriptor.db")
     api_key: str = ""
-    base_url: str = "https://api.openai.com/v1"
+    base_url: str = ""
     model: str = ""
     timeout: float = 180
     max_output_tokens: int = 12000
     structured_output: bool = True
     context_chars: int = 28000
+    provider: str = "openai"
+
+    def __post_init__(self):
+        if not self.base_url:
+            default = (
+                "https://api.anthropic.com"
+                if self.provider == "anthropic"
+                else "https://api.openai.com/v1"
+            )
+            object.__setattr__(self, "base_url", default)
 
     @classmethod
     def from_env(cls):
         load_dotenv(override=False)
+        provider = os.getenv("SCRIPTOR_PROVIDER", "openai").strip().lower()
+        if provider not in ("openai", "anthropic"):
+            raise ScriptorError("SCRIPTOR_PROVIDER 仅支持 openai 或 anthropic")
+        prefix = "ANTHROPIC" if provider == "anthropic" else "OPENAI"
+        default_url = (
+            "https://api.anthropic.com" if provider == "anthropic" else "https://api.openai.com/v1"
+        )
         try:
             result = cls(
+                provider=provider,
                 database=Path(os.getenv("SCRIPTOR_DB", "data/scriptor.db")),
-                api_key=os.getenv("OPENAI_API_KEY", ""),
-                base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
-                model=os.getenv("OPENAI_MODEL", ""),
+                api_key=os.getenv(f"{prefix}_API_KEY", ""),
+                base_url=os.getenv(f"{prefix}_BASE_URL", default_url).rstrip("/"),
+                model=os.getenv(f"{prefix}_MODEL", ""),
                 timeout=float(os.getenv("SCRIPTOR_TIMEOUT", "180")),
                 max_output_tokens=int(os.getenv("SCRIPTOR_MAX_OUTPUT_TOKENS", "12000")),
                 structured_output=os.getenv("SCRIPTOR_STRUCTURED_OUTPUT", "true").lower() == "true",

@@ -24,6 +24,8 @@
 
 ## Responses API 的准确边界
 
+以下描述 OpenAI 模式；0.6 起新增 Anthropic Messages 模式，见 [架构说明](architecture.md)。
+
 依据 [OpenAI Responses API Reference](https://developers.openai.com/api/reference/python/resources/responses) 和 [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)：
 
 - 所有生成走 `client.responses.create`，使用 `instructions`、`input` 和 `max_output_tokens`。

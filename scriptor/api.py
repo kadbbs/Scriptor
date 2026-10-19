@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .config import Settings
 from .errors import Conflict, ModelError, NotFound, ReviewRejected, ScriptorError
-from .llm import ResponsesModel
+from .llm import create_model
 from .models import (
     AutoRequest,
     CreateBook,
@@ -25,7 +25,7 @@ from .service import StoryService
 
 def create_app(settings: Settings | None = None, model_factory=None):
     settings = settings or Settings.from_env()
-    model_factory = model_factory or (lambda: ResponsesModel(settings))
+    model_factory = model_factory or (lambda: create_model(settings))
 
     @asynccontextmanager
     async def lifespan(app):
@@ -70,7 +70,11 @@ def create_app(settings: Settings | None = None, model_factory=None):
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "api_format": "responses"}
+        return {
+            "status": "ok",
+            "provider": settings.provider,
+            "api_format": "messages" if settings.provider == "anthropic" else "responses",
+        }
 
     @app.get("/api/books")
     def books(svc: StoryService = Depends(service)):

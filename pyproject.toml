@@ -4,10 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scriptor"
-version = "0.5.0"
-description = "Evidence-grounded fiction workflow using the Responses API"
+version = "0.6.0"
+description = "LLM-led fiction using OpenAI Responses or Anthropic Messages"
 requires-python = ">=3.10"
-dependencies = ["openai>=2.0,<3", "pydantic>=2.10,<3", "python-dotenv>=1.0,<2", "fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
+dependencies = [
+    "openai>=2.0,<3",
+    "pydantic>=2.10,<3",
+    "python-dotenv>=1.0,<2",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "anthropic>=0.125,<1",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.11,<1"]

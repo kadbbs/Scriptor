@@ -12,7 +12,7 @@ from pathlib import Path
 
 from scriptor.config import Settings
 from scriptor.errors import ScriptorError
-from scriptor.llm import ResponsesModel
+from scriptor.llm import create_model
 from scriptor.repository import Repository
 from scriptor.service import StoryService
 
@@ -34,7 +34,7 @@ def main():
     settings = replace(settings, database=folder / "evaluation.db")
     repo = Repository(settings.database)
     before = repo.get(args.book_id)["total_chapters"]
-    model = ResponsesModel(settings)
+    model = create_model(settings)
     service = StoryService(repo, model, settings)
     checkpoint = service._checkpoint
 
