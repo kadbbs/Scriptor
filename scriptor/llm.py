@@ -7,7 +7,7 @@ from openai import APIError, OpenAI
 from pydantic import BaseModel, ValidationError
 
 from .config import Settings
-from .errors import ModelError
+from .errors import ModelError, StructuredOutputError
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -98,4 +98,6 @@ class ResponsesModel:
         try:
             return schema.model_validate_json(raw)
         except ValidationError as exc:
-            raise ModelError(f"模型返回的数据不符合 {schema.__name__}，未写入故事状态") from exc
+            raise StructuredOutputError(
+                f"模型返回的数据不符合 {schema.__name__}，未写入故事状态"
+            ) from exc

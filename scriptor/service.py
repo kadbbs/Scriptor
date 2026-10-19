@@ -1,11 +1,29 @@
 from collections.abc import Callable
+from hashlib import sha256
 
 from . import prompts
 from .config import Settings
 from .context import build_context, memory
-from .errors import Conflict, ReviewRejected, ScriptorError, StopRequested
+from .errors import (
+    Conflict,
+    EvidenceError,
+    ModelError,
+    ReviewRejected,
+    ScriptorError,
+    StopRequested,
+    StructuredOutputError,
+)
+from .evidence import render_sources, resolve_review, sources_for
 from .llm import Model
-from .models import Bible, CreativeBlueprint, Direction, PlanBatch, PlanRequest, Review, StageInput
+from .models import (
+    Bible,
+    CreativeBlueprint,
+    Direction,
+    PlanBatch,
+    PlanRequest,
+    SourceReview,
+    StageInput,
+)
 from .repository import Repository, dump
 
 
@@ -72,6 +90,17 @@ class StoryService:
                 str(exc)
                 if isinstance(exc, ScriptorError)
                 else f"{type(exc).__name__}：操作失败，故事状态未提交"
+            )
+            artifacts["failure_kind"] = (
+                "review_structure"
+                if isinstance(exc, EvidenceError)
+                else "model"
+                if isinstance(exc, ModelError)
+                else "paused"
+                if isinstance(exc, StopRequested)
+                else "content"
+                if isinstance(exc, ReviewRejected)
+                else "other"
             )
             self.repo.fail(run_id, message, artifacts, calls[offset:])
             if isinstance(exc, (ScriptorError, KeyboardInterrupt, SystemExit)):
@@ -257,11 +286,23 @@ class StoryService:
         number = book["total_chapters"] + 1
         if not any(p["number"] == number and p["stage"] == book["stage"] for p in book["plans"]):
             self.plan(book_id)
+        book = self.repo.get(book_id)
+        plan = next(p["data"] for p in book["plans"] if p["number"] == number)
+        preserved = self.repo.recoverable_candidate(book_id, self._draft_fingerprint(book, plan))
         feedback = None
         for attempt in range(3):
             try:
-                result = self.write(book_id, number, repair_notes=feedback)
+                result = self.write(
+                    book_id,
+                    number,
+                    repair_notes=feedback,
+                    content=preserved["content"] if preserved and attempt == 0 else None,
+                    recovered_from=preserved["run_id"] if preserved and attempt == 0 else None,
+                )
                 return {"finished": False, **result}
+            except EvidenceError:
+                # Review repair has its own bounded loop; rewriting the author text cannot fix it.
+                raise
             except ReviewRejected as exc:
                 if attempt == 2:
                     raise
@@ -274,6 +315,22 @@ class StoryService:
                     "instruction": "重新写出完整正文，修复以上问题；失败候选不是已发生事实",
                 }
 
+    @staticmethod
+    def _draft_fingerprint(book, plan):
+        context = {
+            "spec": book["spec"],
+            "bible": book["bible"],
+            "stage": book["stage"],
+            "stages": book["stages"],
+            "plan": plan,
+            "previous_versions": [
+                (ch["number"], ch["version"])
+                for ch in book["chapters"]
+                if ch["number"] < plan["number"]
+            ],
+        }
+        return sha256(dump(context).encode("utf-8")).hexdigest()
+
     def write(
         self,
         book_id,
@@ -282,6 +339,7 @@ class StoryService:
         content: str | None = None,
         expected_revision: int | None = None,
         repair_notes: dict | None = None,
+        recovered_from: str | None = None,
     ):
         def action(book, artifacts):
             if expected_revision is not None and book["revision"] != expected_revision:
@@ -302,26 +360,22 @@ class StoryService:
                 else plan["data"]
             )
             context = self._context(book, number, focus, artifacts)
+            artifacts["draft_fingerprint"] = self._draft_fingerprint(book, plan["data"])
+            if recovered_from:
+                artifacts["recovered_from"] = recovered_from
+            self._checkpoint(
+                book_id,
+                f"复用第{number}章候选，准备审核"
+                if recovered_from
+                else f"生成第{number}章正文"
+                if content is None
+                else f"审核第{number}章编辑稿",
+            )
             candidate = content if content is not None else self.model.text(prompts.WRITE, context)
             artifacts["candidate"] = candidate
             if not candidate.strip() or len(candidate) > 60000:
                 raise ReviewRejected("正文为空或超过 60000 字符；未截断或写入正文")
-            # Include the entire candidate, never just its opening.
-            review_budget = self.settings.context_chars - len(candidate) - len(prompts.REVIEW) - 100
-            if review_budget <= 0:
-                raise ReviewRejected(
-                    "完整正文超出审核预算；候选已保留，请增加 SCRIPTOR_CONTEXT_CHARS"
-                )
-            review_context = self._context(
-                book, number, plan["data"], artifacts, budget=review_budget, label="review_context"
-            )
-            review_prompt = review_context + "\n【本章完整正文】\n" + candidate
-            review = self.model.structured(
-                prompts.EDITOR, prompts.REVIEW + "\n" + review_prompt, Review
-            )
-            artifacts["review"] = review.model_dump()
-            stage = next(s for s in book["stages"] if s["number"] == book["stage"])
-            self._validate_review(candidate, review, stage["spec"]["acceptance"])
+            review = self._review_candidate(book, number, plan["data"], candidate, artifacts)
             current = next((ch for ch in book["chapters"] if ch["number"] == number), None)
             version = current["version"] + 1 if current else 1
             title = plan["data"]["title"]
@@ -364,24 +418,79 @@ class StoryService:
 
         return self._execute(book_id, "edit" if content is not None else "write", action)
 
+    def _review_candidate(self, book, number, plan, candidate, artifacts):
+        sources = sources_for(candidate)
+        numbered = render_sources(sources)
+        stage = next(s for s in book["stages"] if s["number"] == book["stage"])
+        acceptance = stage["spec"]["acceptance"]
+        checklist = dump([{"id": i + 1, "criterion": text} for i, text in enumerate(acceptance)])
+        suffix = (
+            "\n【验收项目】\n" + checklist + "\n【本章完整正文（P 编号只用于定位）】\n" + numbered
+        )
+        # Keep the entire manuscript; budget the source labels, checklist and repair diagnostics too.
+        budget = self.settings.context_chars - len(suffix) - len(prompts.REVIEW) - 1500
+        if budget <= 0:
+            raise ReviewRejected("完整正文超出审核预算；候选已保留，请增加 SCRIPTOR_CONTEXT_CHARS")
+        context = self._context(
+            book, number, plan, artifacts, budget=budget, label="review_context"
+        )
+        artifacts["evidence_sources"] = [
+            {"id": s.id, "start": s.start, "end": s.end} for s in sources
+        ]
+        attempts = artifacts["review_attempts"] = []
+        feedback = ""
+        for attempt in range(3):
+            self._checkpoint(
+                book["id"],
+                "全文审核与事实抽取"
+                if not attempt
+                else f"修复审核证据（{attempt}/2），正文保持不变",
+            )
+            record = {"attempt": attempt + 1, "status": "started"}
+            attempts.append(record)
+            try:
+                result = self.model.structured(
+                    prompts.EDITOR,
+                    prompts.REVIEW + "\n" + context + suffix + feedback,
+                    SourceReview,
+                )
+                record["source_review"] = result.model_dump()
+                review = resolve_review(result, sources, acceptance)
+                artifacts["review"] = review.model_dump()
+                self._validate_review(candidate, review, acceptance)
+                record["status"] = "accepted"
+                return review
+            except (EvidenceError, StructuredOutputError) as exc:
+                record.update(status="repair_required", error=str(exc))
+                if attempt == 2:
+                    raise EvidenceError(f"审核证据修复三次仍未通过：{exc}") from exc
+                feedback = (
+                    "\n【上次审核结构问题】\n"
+                    + str(exc)[:700]
+                    + "\n请重新审核同一份正文，修正编号或结构。不要重写正文，不要随机指派证据；无直接支持的事实删除，未证实条件判为 false。"
+                )
+            except ReviewRejected as exc:
+                record.update(status="content_rejected", error=str(exc))
+                raise
+
     @staticmethod
     def _validate_review(content, review, acceptance):
         if review.contradictions:
             raise ReviewRejected("审核发现实质矛盾；候选和审核结果已保留在 runs，未替换正文")
         if [c.criterion for c in review.criteria] != acceptance:
-            raise ReviewRejected("审核未按顺序覆盖全部阶段验收标准")
+            raise EvidenceError("审核未按顺序覆盖全部阶段验收标准")
         keys = [(f.kind, f.key) for f in review.facts]
         if len(keys) != len(set(keys)):
-            raise ReviewRejected("审核包含重复事实标识")
+            raise EvidenceError("审核包含重复事实标识")
         quotes = [fact.evidence for fact in review.facts]
         for criterion in review.criteria:
             if criterion.achieved and not criterion.evidence:
-                raise ReviewRejected("目标达成判定缺少正文证据")
+                raise EvidenceError("目标达成判定缺少正文证据")
             if not criterion.achieved and criterion.evidence:
-                raise ReviewRejected("未达成条件不能附带达成证据")
+                raise EvidenceError("未达成条件不能附带达成证据")
             quotes.extend(criterion.evidence)
         if any(quote not in content for quote in quotes):
-            raise ReviewRejected("审核引用并非本章原文，不能写入事实记忆")
+            raise EvidenceError("审核引用并非本章原文，不能写入事实记忆")
 
     def advance(self, book_id, stage: StageInput, confirm: bool):
         if confirm is not True:

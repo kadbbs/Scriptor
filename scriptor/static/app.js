@@ -89,7 +89,10 @@ function renderShelf() {
 async function loadBook(id, number = null) {
   clearTimeout(pollTimer);
   const sequence = ++loadSequence;
-  const [book, jobs] = await Promise.all([api(`/api/books/${encodeURIComponent(id)}`), api(`/api/books/${encodeURIComponent(id)}/auto`)]);
+  // Read task status before the book: a terminal job must never be paired with an older
+  // manuscript snapshot, otherwise polling could stop while the last chapter stays invisible.
+  const jobs = await api(`/api/books/${encodeURIComponent(id)}/auto`);
+  const book = await api(`/api/books/${encodeURIComponent(id)}`);
   if (sequence !== loadSequence) return;
   state.book = book; state.job = jobs[0] || null;
   const available = [...new Set([...state.book.plans, ...state.book.chapters].map((c) => c.number))].sort((a, b) => a - b);
@@ -184,7 +187,8 @@ async function loadRuns() {
   $("#runs-content").innerHTML = state.runs.length ? state.runs.map((run, i) => {
     const art = run.artifacts, candidate = art.candidate;
     const tokens = run.calls.reduce((sum, c) => sum + (c.usage?.total_tokens || 0), 0);
-    return `<article class="card"><div class="run-head"><h3>${names[run.operation] || escape(run.operation)}</h3><span class="pill ${run.status === "failed" ? "failure" : ""}">${({ succeeded: "已完成", failed: "未采纳", running: "执行中或曾中断" })[run.status] || escape(run.status)}</span></div><small>${escape(run.created_at)} UTC · ${tokens.toLocaleString()} tokens</small>${run.error ? `<p class="failure">${escape(run.error)}</p>` : ""}${art.review ? `<details><summary>审核结果</summary><div class="run-content">${escape(art.review.summary)}${art.review.contradictions.length ? `\n矛盾：${escape(art.review.contradictions.join("；"))}` : ""}\n${art.review.criteria.map((c) => `${c.achieved ? "✓" : "○"} ${escape(c.criterion)}\n${c.evidence.map(escape).join("\n")}`).join("\n")}</div></details>` : ""}${candidate ? `<details><summary>候选正文</summary><div class="run-content">${escape(candidate)}</div></details><div class="run-actions"><button class="secondary" data-recover="${i}">载入当前章节编辑器</button><button class="subtle" data-download-run="${i}">下载候选</button></div>` : ""}</article>`;
+    const process = `${art.recovered_from ? '<p class="muted">复用了与当前设定和规划一致的已生成候选，未重复生成正文。</p>' : ""}${art.review_attempts?.length ? `<details><summary>审核过程 · ${art.review_attempts.length} 次</summary>${art.review_attempts.map((a) => `<p>第 ${a.attempt} 次：${({ accepted:"通过", repair_required:"修复审核结构与证据", content_rejected:"需要修订正文", started:"调用未完成" })[a.status] || escape(a.status)}${a.error ? ` · ${escape(a.error)}` : ""}</p>`).join("")}</details>` : ""}`;
+    return `<article class="card"><div class="run-head"><h3>${names[run.operation] || escape(run.operation)}</h3><span class="pill ${run.status === "failed" ? "failure" : ""}">${({ succeeded: "已完成", failed: "未采纳", running: "执行中或曾中断" })[run.status] || escape(run.status)}</span></div><small>${escape(run.created_at)} UTC · ${tokens.toLocaleString()} tokens</small>${run.error ? `<p class="failure">${escape(run.error)}</p>` : ""}${process}${art.review ? `<details><summary>审核结果</summary><div class="run-content">${escape(art.review.summary)}${art.review.contradictions.length ? `\n矛盾：${escape(art.review.contradictions.join("；"))}` : ""}\n${art.review.criteria.map((c) => `${c.achieved ? "✓" : "○"} ${escape(c.criterion)}\n${c.evidence.map(escape).join("\n")}`).join("\n")}</div></details>` : ""}${candidate ? `<details><summary>候选正文</summary><div class="run-content">${escape(candidate)}</div></details><div class="run-actions"><button class="secondary" data-recover="${i}">载入当前章节编辑器</button><button class="subtle" data-download-run="${i}">下载候选</button></div>` : ""}</article>`;
   }).join("") : '<div class="empty">还没有运行记录。完成一次生成后，可以在这里查看。</div>';
 }
 function stageDialog() {

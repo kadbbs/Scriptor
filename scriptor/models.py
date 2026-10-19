@@ -155,6 +155,29 @@ class Review(Contract):
     confidence: float = Field(ge=0, le=1)
 
 
+class SourceFact(Contract):
+    key: Text
+    kind: Literal["character", "event", "thread"]
+    subject: Text
+    detail: Text
+    status: Literal["active", "resolved"]
+    source_id: int = Field(ge=1)
+
+
+class SourceCriterion(Contract):
+    criterion_id: int = Field(ge=1)
+    achieved: bool = Field(strict=True)
+    source_ids: list[int]
+
+
+class SourceReview(Contract):
+    summary: Text
+    facts: list[SourceFact]
+    contradictions: list[Text]
+    criteria: list[SourceCriterion]
+    confidence: float = Field(ge=0, le=1)
+
+
 class PlanRequest(Contract):
     start: int = Field(ge=1)
     count: int = Field(default=5, ge=1, le=20)

@@ -20,3 +20,11 @@ class ReviewRejected(ScriptorError):
 
 class StopRequested(ScriptorError):
     pass
+
+
+class EvidenceError(ReviewRejected):
+    """Review bookkeeping is invalid; repair the review, not the manuscript."""
+
+
+class StructuredOutputError(ModelError):
+    """A completed model response did not satisfy its output contract."""

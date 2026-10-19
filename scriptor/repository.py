@@ -214,6 +214,22 @@ class Repository:
             ).fetchall()
         return [{**dict(r), "review": json.loads(r["review"])} for r in rows]
 
+    def recoverable_candidate(self, book_id, fingerprint):
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id,artifacts FROM runs WHERE book_id=? AND status='failed' ORDER BY rowid DESC LIMIT 12",
+                (book_id,),
+            ).fetchall()
+        for row in rows:
+            artifacts = json.loads(row["artifacts"])
+            if (
+                artifacts.get("draft_fingerprint") == fingerprint
+                and artifacts.get("failure_kind") in ("review_structure", "model", "paused")
+                and artifacts.get("candidate", "").strip()
+            ):
+                return {"run_id": row["id"], "content": artifacts["candidate"]}
+        return None
+
     @staticmethod
     def _expire_jobs(conn):
         conn.execute(

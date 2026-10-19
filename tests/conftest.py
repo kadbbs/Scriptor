@@ -1,3 +1,6 @@
+import json
+import re
+
 import pytest
 
 from scriptor.config import Settings
@@ -8,6 +11,7 @@ from scriptor.models import (
     CreativeBlueprint,
     PlanBatch,
     Review,
+    SourceReview,
     StageDesign,
 )
 from scriptor.repository import Repository
@@ -162,6 +166,36 @@ class FakeModel:
         result = self.outputs.pop(0)
         if isinstance(result, Exception):
             raise result
+        if schema is SourceReview and isinstance(result, Review):
+            sources = [
+                (int(i), text) for i, text in re.findall(r"^\[P(\d+)\] (.*)$", prompt, re.MULTILINE)
+            ]
+            checklist = json.loads(
+                prompt.split("【验收项目】\n", 1)[1].split("\n【本章完整正文", 1)[0]
+            )
+
+            def source_id(quote):
+                return next((i for i, text in sources if quote in text), 999999)
+
+            result = SourceReview(
+                summary=result.summary,
+                confidence=result.confidence,
+                contradictions=result.contradictions,
+                facts=[
+                    {**f.model_dump(exclude={"evidence"}), "source_id": source_id(f.evidence)}
+                    for f in result.facts
+                ],
+                criteria=[
+                    {
+                        "criterion_id": next(
+                            (c["id"] for c in checklist if c["criterion"] == cr.criterion), 999999
+                        ),
+                        "achieved": cr.achieved,
+                        "source_ids": [source_id(q) for q in cr.evidence],
+                    }
+                    for cr in result.criteria
+                ],
+            )
         assert isinstance(result, schema)
         return result
 

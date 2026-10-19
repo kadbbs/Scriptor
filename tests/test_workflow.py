@@ -2,6 +2,7 @@ import pytest
 
 from scriptor.context import build_context
 from scriptor.errors import Conflict, ModelError, ReviewRejected, ScriptorError
+from scriptor.evidence import render_sources, sources_for
 from scriptor.models import Criterion, PlanBatch, PlanRequest, StageInput
 from scriptor.repository import Repository
 
@@ -57,7 +58,7 @@ def test_review_rejection_preserves_candidate_not_canon(setup, fault):
         assessment.facts *= 2
     else:
         assessment.criteria[0].evidence = []
-    model.outputs += [content, assessment]
+    model.outputs += [content, assessment, assessment, assessment]
     with pytest.raises(ReviewRejected):
         svc.write(book_id, 1)
     assert svc.repo.get(book_id)["total_chapters"] == 0
@@ -85,7 +86,7 @@ def test_submit_candidate_skips_writer_but_still_reviews(setup):
     model.outputs += [review(content)]
     svc.write(book_id, 1, content=content)
     assert svc.inspect(book_id)["progress"]["achieved"]
-    assert content in model.prompts[-1]
+    assert render_sources(sources_for(content)) in model.prompts[-1]
 
 
 def test_replan_replaces_future_suffix(setup):
@@ -198,7 +199,7 @@ def test_full_chapter_tail_reaches_reviewer(setup):
     assessment = review("最后一行揭示笔迹。")
     model.outputs += [content, assessment]
     svc.write(book_id, 1)
-    assert content in model.prompts[-1]
+    assert render_sources(sources_for(content)) in model.prompts[-1]
 
 
 def test_context_excludes_future_and_respects_budget(setup):
