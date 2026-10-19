@@ -18,6 +18,7 @@ class Settings:
     structured_output: bool = True
     context_chars: int = 28000
     provider: str = "openai"
+    anthropic_structured_mode: str = "tool"
     auto_retries: int = 2
     retry_delay: float = 5
 
@@ -43,6 +44,9 @@ class Settings:
         try:
             result = cls(
                 provider=provider,
+                anthropic_structured_mode=os.getenv("ANTHROPIC_STRUCTURED_MODE", "tool")
+                .strip()
+                .lower(),
                 auto_retries=int(os.getenv("SCRIPTOR_AUTO_RETRIES", "2")),
                 retry_delay=float(os.getenv("SCRIPTOR_RETRY_DELAY", "5")),
                 database=Path(os.getenv("SCRIPTOR_DB", "data/scriptor.db")),
@@ -62,4 +66,10 @@ class Settings:
             raise ScriptorError(
                 "SCRIPTOR_AUTO_RETRIES 必须为 0–5，SCRIPTOR_RETRY_DELAY 必须为 0–60 秒"
             )
+        if result.provider == "anthropic" and result.anthropic_structured_mode not in (
+            "tool",
+            "json_schema",
+            "json",
+        ):
+            raise ScriptorError("ANTHROPIC_STRUCTURED_MODE 仅支持 tool、json_schema 或 json")
         return result

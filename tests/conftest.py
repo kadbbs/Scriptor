@@ -39,6 +39,7 @@ def isolate_user_configuration(monkeypatch):
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL",
+        "ANTHROPIC_STRUCTURED_MODE",
     ):
         monkeypatch.delenv(key, raising=False)
 

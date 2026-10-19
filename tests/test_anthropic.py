@@ -25,7 +25,7 @@ def response(text, stop="end_turn", content=None):
     }
 
 
-def provider(handler, structured=True):
+def provider(handler, structured=True, mode="json_schema"):
     client = Anthropic(
         api_key="test-anthropic-key",
         base_url="https://anthropic.invalid",
@@ -33,7 +33,13 @@ def provider(handler, structured=True):
         http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
     return AnthropicModel(
-        Settings(provider="anthropic", model="test-claude", structured_output=structured), client
+        Settings(
+            provider="anthropic",
+            model="test-claude",
+            structured_output=structured,
+            anthropic_structured_mode=mode,
+        ),
+        client,
     )
 
 
@@ -52,7 +58,10 @@ def test_sdk_uses_messages_auth_system_and_transformed_schema():
     assert req.headers["x-api-key"] == "test-anthropic-key"
     assert "anthropic-version" in req.headers
     assert body["system"] == "editor"
-    assert body["messages"] == [{"role": "user", "content": "outline"}]
+    assert body["messages"][0]["role"] == "user"
+    prompt = body["messages"][0]["content"]
+    assert prompt.startswith("outline")
+    assert json.loads(prompt.split("JSON Schema:\n", 1)[1]) == Bible.model_json_schema()
     assert body["max_tokens"] == 12000
     assert body["output_config"]["format"]["type"] == "json_schema"
     assert body["output_config"]["format"]["schema"]["additionalProperties"] is False
@@ -158,7 +167,8 @@ def test_actual_workflow_schemas_are_transformed_and_sent(schema):
     assert captured[0]["output_config"]["format"]["schema"]["$defs"]
 
 
-def test_real_sdk_completes_director_writer_literary_and_fact_pipeline(setup):
+@pytest.mark.parametrize("mode", ["json_schema", "tool"])
+def test_real_sdk_completes_director_writer_literary_and_fact_pipeline(setup, mode):
     from .conftest import literary_review, narrative_brief, prepare
 
     svc, fake, book_id = setup
@@ -169,6 +179,8 @@ def test_real_sdk_completes_director_writer_literary_and_fact_pipeline(setup):
         paths.append(req.url.path)
         body = json.loads(req.content)
         schema = body.get("output_config", {}).get("format", {}).get("schema", {})
+        if "tools" in body:
+            schema = body["tools"][0]["input_schema"]
         outputs = {
             "NarrativeBrief": narrative_brief().model_dump_json(),
             "LiteraryReview": literary_review().model_dump_json(),
@@ -182,11 +194,11 @@ def test_real_sdk_completes_director_writer_literary_and_fact_pipeline(setup):
                 }
             ),
         }
-        return httpx.Response(
-            200, json=response(outputs.get(schema.get("title"), "林海确认了姐姐的笔迹。"))
-        )
+        text = outputs.get(schema.get("title"), "林海确认了姐姐的笔迹。")
+        payload = tool_response(json.loads(text)) if "tools" in body else response(text)
+        return httpx.Response(200, json=payload)
 
-    svc.model = provider(handler)
+    svc.model = provider(handler, mode=mode)
     chapter = svc.step(book_id)
     assert chapter["content"] == "林海确认了姐姐的笔迹。"
     assert chapter["review"]["criteria"][0]["evidence"] == [chapter["content"]]
@@ -292,3 +304,135 @@ def test_transient_network_error_is_classified_without_exposing_details():
     assert "secret-connection-detail" not in str(exc.value)
     assert "network" in str(exc.value)
     assert model.calls[0]["status"] == "failed"
+
+
+def test_gateway_ignoring_native_schema_still_gets_complete_json_contract():
+    def handler(req):
+        body = json.loads(req.content)
+        prompt = body["messages"][0]["content"]
+        # Reproduce a gateway that ignores output_config and only forwards messages.
+        if "JSON Schema:\n" not in prompt:
+            return httpx.Response(200, json=response("# CreativeBlueprint\n## WORLD\n普通大纲"))
+        supplied = json.loads(prompt.split("JSON Schema:\n", 1)[1])
+        assert supplied["required"] == Bible.model_json_schema()["required"]
+        assert "output_config" in body  # Native constraints are retained.
+        return httpx.Response(200, json=response(bible().model_dump_json()))
+
+    model = provider(handler)
+    assert model.structured("editor", "outline", Bible) == bible()
+    assert model.calls[0]["request"]["schema"] == "Bible"
+    assert model.calls[0]["request"]["native_schema"] is True
+    assert model.calls[0]["request"]["max_output_tokens"] == 12000
+
+
+@pytest.mark.parametrize("language", ["json", "JSON", ""])
+def test_complete_json_code_fence_is_unwrapped_and_fully_validated(language):
+    model = provider(
+        lambda req: httpx.Response(
+            200, json=response(f"```{language}\n{bible().model_dump_json()}\n```")
+        )
+    )
+    assert model.structured("editor", "outline", Bible) == bible()
+    assert model.calls[0]["json_envelope_removed"] is True
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        'Here is the result: {"world":"secret-story"}',
+        '```json\n{"world":"secret-story"}',
+        '```json\n{"world":"secret-story"}\n```',
+        "# CreativeBlueprint\n## WORLD\nsecret-story",
+    ],
+)
+def test_prose_partial_json_and_missing_fields_are_not_guessed_or_accepted(raw):
+    model = provider(lambda req: httpx.Response(200, json=response(raw)))
+    with pytest.raises(StructuredOutputError):
+        model.structured("editor", "outline", Bible)
+    diagnostic = model.calls[0]["validation"]
+    assert diagnostic["schema"] == "Bible" and diagnostic["errors"]
+    assert "secret-story" not in json.dumps(model.calls)
+
+
+def tool_response(data, stop="tool_use", name="submit_result"):
+    return response(
+        "",
+        stop,
+        content=[
+            {
+                "type": "tool_use",
+                "id": "toolu_result",
+                "name": name,
+                "input": data,
+            }
+        ],
+    )
+
+
+def test_tool_mode_uses_exact_submission_tool_and_validates_arguments():
+    captured = []
+
+    def handler(req):
+        captured.append(json.loads(req.content))
+        return httpx.Response(200, json=tool_response(bible().model_dump()))
+
+    model = provider(handler, mode="tool")
+    assert model.structured("editor", "outline", Bible) == bible()
+    body = captured[0]
+    assert "output_config" not in body
+    assert body["tool_choice"] == {"type": "tool", "name": "submit_result"}
+    assert body["tools"][0]["input_schema"] == Bible.model_json_schema()
+    assert model.calls[0]["request"]["structured_mode"] == "tool"
+    assert model.calls[0]["request"]["native_schema"] is False
+
+
+@pytest.mark.parametrize("case", ["wrong_name", "multiple", "missing", "string_input"])
+def test_tool_mode_never_accepts_missing_ambiguous_or_wrong_tool(case):
+    payload = tool_response(bible().model_dump())
+    if case == "wrong_name":
+        payload["content"][0]["name"] = "delete_file"
+    elif case == "multiple":
+        payload["content"].append(dict(payload["content"][0]))
+    elif case == "missing":
+        payload = response("# CreativeBlueprint", "end_turn")
+    elif case == "string_input":
+        payload["content"][0]["input"] = bible().model_dump_json()
+    model = provider(lambda req: httpx.Response(200, json=payload), mode="tool")
+    with pytest.raises(StructuredOutputError):
+        model.structured("editor", "outline", Bible)
+    assert model.calls[0]["validation"]["output_shape"] == "unexpected_tool_response"
+
+
+@pytest.mark.parametrize("stop", ["max_tokens", "refusal"])
+def test_tool_mode_rejects_truncated_or_refused_arguments(stop):
+    model = provider(
+        lambda req: httpx.Response(200, json=tool_response(bible().model_dump(), stop)), mode="tool"
+    )
+    with pytest.raises(ModelError):
+        model.structured("editor", "outline", Bible)
+
+
+@pytest.mark.parametrize("structured,mode", [(True, "json"), (False, "tool")])
+def test_json_mode_and_legacy_false_switch_remain_explicit(structured, mode):
+    captured = []
+
+    def handler(req):
+        captured.append(json.loads(req.content))
+        return httpx.Response(200, json=response(bible().model_dump_json()))
+
+    model = provider(handler, structured=structured, mode=mode)
+    assert model.structured("editor", "outline", Bible) == bible()
+    assert "tools" not in captured[0] and "output_config" not in captured[0]
+    assert "JSON Schema:" in captured[0]["messages"][0]["content"]
+
+
+def test_anthropic_structured_mode_is_validated_and_defaults_to_tool(monkeypatch):
+    from scriptor.errors import ScriptorError
+
+    monkeypatch.setenv("SCRIPTOR_PROVIDER", "anthropic")
+    assert Settings.from_env().anthropic_structured_mode == "tool"
+    monkeypatch.setenv("ANTHROPIC_STRUCTURED_MODE", "json_schema")
+    assert Settings.from_env().anthropic_structured_mode == "json_schema"
+    monkeypatch.setenv("ANTHROPIC_STRUCTURED_MODE", "unsupported")
+    with pytest.raises(ScriptorError, match="ANTHROPIC_STRUCTURED_MODE"):
+        Settings.from_env()

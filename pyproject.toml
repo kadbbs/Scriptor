@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scriptor"
-version = "0.6.1"
+version = "0.6.2"
 description = "LLM-led fiction using OpenAI Responses or Anthropic Messages"
 requires-python = ">=3.10"
 dependencies = [

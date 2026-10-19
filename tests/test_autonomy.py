@@ -332,3 +332,22 @@ def test_pause_during_retry_wait_is_prompt_and_does_not_start_another_call(auton
         assert len(model.outputs) == 1
     finally:
         runner.close()
+
+
+def test_invalid_structured_proposal_is_preserved_without_changing_book(autonomous):
+    from scriptor.errors import StructuredOutputError
+
+    svc, model, book_id = autonomous
+    raw = "# CreativeBlueprint\n普通 Markdown 大纲"
+    model.outputs = [
+        StructuredOutputError("json_invalid", raw_output=raw, schema_name="CreativeBlueprint")
+    ]
+    with pytest.raises(StructuredOutputError):
+        svc.conceive(book_id)
+    run = svc.repo.runs(book_id)[0]
+    assert run["artifacts"]["structured_candidate"] == {
+        "schema": "CreativeBlueprint",
+        "content": raw,
+    }
+    assert raw not in run["error"]
+    assert svc.repo.get(book_id)["bible"] is None

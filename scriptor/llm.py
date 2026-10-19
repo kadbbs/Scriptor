@@ -33,7 +33,34 @@ class _ModelClient:
         if self._client is not None:
             self._client.close()
 
-    def _api_failure(self, provider, exc):
+    @staticmethod
+    def _json_contract(schema):
+        return (
+            "\n【结构化输出协议】\n"
+            "只返回一个符合以下 JSON Schema 的 JSON 对象。必须使用 Schema 中的英文字段名，"
+            "中文创作内容写在字段值中。包含全部 required 字段，遵守类型、枚举、长度与数值约束。"
+            "不要输出 Markdown 大纲、代码围栏、解释或 Schema 本身。\nJSON Schema:\n"
+            + json.dumps(schema.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
+        )
+
+    def _request_info(self, instructions, prompt, schema, mode=None):
+        mode = mode or (
+            "text"
+            if schema is None
+            else "json_schema"
+            if self.settings.structured_output
+            else "json"
+        )
+        return {
+            "structured_mode": mode,
+            "max_output_tokens": self.settings.max_output_tokens,
+            "input_chars": len(prompt),
+            "system_chars": len(instructions),
+            "schema": schema.__name__ if schema is not None else None,
+            "native_schema": mode == "json_schema",
+        }
+
+    def _api_failure(self, provider, exc, request_info=None):
         code = getattr(exc, "status_code", None)
         response = getattr(exc, "response", None)
         headers = response.headers if response is not None else {}
@@ -68,11 +95,16 @@ class _ModelClient:
                 "request_id": request_id,
                 "usage": None,
                 "error_type": type(exc).__name__,
+                "request": request_info,
             }
         )
         name = "Anthropic" if provider == "anthropic" else "Responses"
         status = f"HTTP {code}" if code is not None else "network"
         suffix = f"；请求编号 {request_id}" if request_id else ""
+        model_name = re.sub(r"[\r\n\t]", " ", self.settings.model)
+        if self.settings.api_key:
+            model_name = model_name.replace(self.settings.api_key, "[REDACTED]")
+        suffix += f"；模型 {model_name[:120]}"
         if code == 429:
             message = f"{name} 请求被限流（{status}）；请稍后重试或检查服务配额"
         elif code is not None and code >= 500:
@@ -103,11 +135,39 @@ class _ModelClient:
 
     def structured(self, instructions: str, prompt: str, schema: type[T]) -> T:
         raw = self._request(instructions, prompt, schema)
+        # Some compatible endpoints wrap otherwise complete JSON in a code fence.
+        # Never extract a fragment from prose or repair missing/invalid fields.
+        fenced = re.fullmatch(
+            r"```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```", raw.strip(), re.IGNORECASE
+        )
+        payload = fenced.group(1) if fenced else raw
+        if fenced and self.calls:
+            self.calls[-1]["json_envelope_removed"] = True
         try:
-            return schema.model_validate_json(raw)
+            return schema.model_validate_json(payload)
         except ValidationError as exc:
+            issues = [
+                {"path": ".".join(map(str, e["loc"])) or "$", "type": e["type"]}
+                for e in exc.errors(include_input=False, include_context=False, include_url=False)[
+                    :10
+                ]
+            ]
+            if self.calls:
+                self.calls[-1]["validation"] = {
+                    "schema": schema.__name__,
+                    "response_chars": len(raw),
+                    "output_shape": "json_fence"
+                    if fenced
+                    else "json_object"
+                    if raw.lstrip().startswith("{")
+                    else "other",
+                    "errors": issues,
+                }
+            detail = "; ".join(f"{i['path']}: {i['type']}" for i in issues[:3])
             raise StructuredOutputError(
-                f"模型返回的数据不符合 {schema.__name__}，未写入故事状态"
+                f"模型返回的数据不符合 {schema.__name__}（{detail}），未写入故事状态",
+                raw_output=raw,
+                schema_name=schema.__name__,
             ) from exc
 
 
@@ -138,9 +198,8 @@ class ResponsesModel(_ModelClient):
                     }
                 }
             else:
-                prompt += "\n只返回符合以下 Schema 的 JSON 对象：\n" + json.dumps(
-                    schema.model_json_schema(), ensure_ascii=False
-                )
+                prompt += self._json_contract(schema)
+        request_info = self._request_info(instructions, prompt, schema)
         try:
             response = self.client.responses.create(
                 model=self.settings.model,
@@ -151,11 +210,12 @@ class ResponsesModel(_ModelClient):
                 **kwargs,
             )
         except APIError as exc:
-            raise self._api_failure("openai", exc) from exc
+            raise self._api_failure("openai", exc, request_info) from exc
         usage = getattr(response, "usage", None)
         self.calls.append(
             {
                 "provider": "openai",
+                "request": request_info,
                 "response_id": response.id,
                 "model": response.model,
                 "usage": usage.model_dump() if usage else None,
@@ -191,15 +251,33 @@ class AnthropicModel(_ModelClient):
 
     def _request(self, instructions, prompt, schema=None):
         kwargs = {}
+        mode = (
+            "text"
+            if schema is None
+            else self.settings.anthropic_structured_mode
+            if self.settings.structured_output
+            else "json"
+        )
+        if mode not in ("text", "tool", "json_schema", "json"):
+            raise ModelError("ANTHROPIC_STRUCTURED_MODE 仅支持 tool、json_schema 或 json")
         if schema is not None:
-            if self.settings.structured_output:
-                kwargs["output_config"] = {
-                    "format": {"type": "json_schema", "schema": transform_schema(schema)}
-                }
+            if mode == "tool":
+                kwargs["tools"] = [
+                    {
+                        "name": "submit_result",
+                        "description": "Submit the complete structured result. Fill all required fields of the supplied schema.",
+                        "input_schema": schema.model_json_schema(),
+                    }
+                ]
+                kwargs["tool_choice"] = {"type": "tool", "name": "submit_result"}
+                prompt += "\n【提交协议】必须调用 submit_result，将完整结果填入其参数。不要在普通文本中输出方案。本工具只提交数据，不执行外部操作。"
             else:
-                prompt += "\n只返回符合以下 Schema 的 JSON 对象：\n" + json.dumps(
-                    schema.model_json_schema(), ensure_ascii=False
-                )
+                if mode == "json_schema":
+                    kwargs["output_config"] = {
+                        "format": {"type": "json_schema", "schema": transform_schema(schema)}
+                    }
+                prompt += self._json_contract(schema)
+        request_info = self._request_info(instructions, prompt, schema, mode)
         try:
             response = self.client.messages.create(
                 model=self.settings.model,
@@ -209,7 +287,7 @@ class AnthropicModel(_ModelClient):
                 **kwargs,
             )
         except AnthropicAPIError as exc:
-            raise self._api_failure("anthropic", exc) from exc
+            raise self._api_failure("anthropic", exc, request_info) from exc
         usage = response.usage.model_dump()
         usage["total_tokens"] = (
             usage.get("input_tokens", 0)
@@ -220,12 +298,35 @@ class AnthropicModel(_ModelClient):
         self.calls.append(
             {
                 "provider": "anthropic",
+                "request": request_info,
                 "response_id": response.id,
                 "model": response.model,
                 "usage": usage,
                 "status": response.stop_reason,
             }
         )
+        if mode == "tool":
+            text = "".join(block.text for block in response.content if block.type == "text")
+            blocks = [block for block in response.content if block.type == "tool_use"]
+            if response.stop_reason not in ("tool_use", "end_turn"):
+                raise ModelError(f"Anthropic 工具参数未完整返回：{response.stop_reason}；未采纳")
+            if (
+                response.stop_reason != "tool_use"
+                or len(blocks) != 1
+                or blocks[0].name != "submit_result"
+                or not isinstance(blocks[0].input, dict)
+            ):
+                self.calls[-1]["validation"] = {
+                    "schema": schema.__name__,
+                    "output_shape": "unexpected_tool_response",
+                    "errors": [{"path": "$", "type": "missing_or_ambiguous_submit_result"}],
+                }
+                raise StructuredOutputError(
+                    "Anthropic 未返回唯一的 submit_result 工具参数；请确认端点支持 tool_choice，或显式选择 json_schema/json 模式",
+                    raw_output=text,
+                    schema_name=schema.__name__,
+                )
+            return json.dumps(blocks[0].input, ensure_ascii=False)
         if response.stop_reason != "end_turn":
             raise ModelError(
                 f"Anthropic 输出未正常完成：{response.stop_reason}；未采纳，请检查输出上限或请求"

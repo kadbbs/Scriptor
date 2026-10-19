@@ -97,11 +97,11 @@ CLI 自动运行使用同一任务机制，终端保持运行；Ctrl+C 请求暂
 
 提供商在启动时显式选择。`Settings.from_env` 分别读取 `OPENAI_*` 或 `ANTHROPIC_*`，两组配置不串用；`create_model` 用于网页请求、CLI、后台任务和真实模型复测脚本。旧配置未设置 `SCRIPTOR_PROVIDER` 时继续使用 OpenAI Responses。
 
-两个适配器共享 `text/structured/close` 合约与完整 Pydantic 本地校验。Anthropic 原生结构化输出使用 `output_config.format`，Schema 先经过官方 SDK 的 `transform_schema`，将不受支持的长度、数值等约束移入描述；本地验证继续执行原始约束。显式 JSON 兼容模式仅关闭远端约束，不跳过本地验证。
+两个适配器共享 `text/structured/close` 合约与完整 Pydantic 本地校验。0.6.2 起 Anthropic 默认使用 `tools` / `tool_choice` 指定唯一的 `submit_result`，从其 `input` 读取结构化数据。不会执行工具。`ANTHROPIC_STRUCTURED_MODE=json_schema` 仍可显式使用 `output_config.format` 和 SDK 的 `transform_schema`；`json` 模式使用完整 JSON 合约提示。所有模式都执行原始 Pydantic 约束。`SCRIPTOR_STRUCTURED_OUTPUT=false` 强制 JSON 文本模式。
 
-只采纳 `end_turn` 完成的文本，忽略 thinking 块，拒绝截断、拒绝、工具调用和空响应。token 总数计入输入、输出及缓存输入；网络与 HTTP 错误统一包装，不向页面暴露响应正文或密钥。SDK 最多重试两次，不自动切换提供商。健康检查返回实际 `provider/api_format`。
+正文与 JSON 文本要求 `end_turn`；工具结构化模式要求 `tool_use` 和唯一同名的 `submit_result` 参数对象。忽略 thinking 块；拒绝截断、拒绝、意外工具、多个工具及空响应。token 总数计入输入、输出及缓存输入；网络与 HTTP 错误统一包装，不向页面暴露响应正文或密钥。SDK 最多重试两次，不自动切换提供商。健康检查返回实际 `provider/api_format`。
 
-真实 Anthropic Python SDK + HTTP MockTransport 测试覆盖请求路径、认证头、system/messages、Schema 转换、本地校验、各种停止原因、错误信息、用量，以及导演→主笔→文学审稿→事实审核的完整写章流程。本机未配置 Anthropic 密钥和模型，因此没有声称已完成真实 Claude 端点验证。
+真实 Anthropic Python SDK + HTTP MockTransport 测试覆盖请求路径、认证头、system/messages、Schema 转换、本地校验、各种停止原因、错误信息、用量，以及导演→主笔→文学审稿→事实审核的完整写章流程。0.6.0 发布时本机尚未配置 Anthropic 凭据；0.6.2 的真实中转验证与兼容性缺陷见 [Anthropic 兼容性排查](anthropic-compatibility.md)。
 
 ## 暂时故障恢复（0.6.1）
 
@@ -112,3 +112,9 @@ SDK 仍最多重试两次；后台在 SDK 抛出暂时故障后，默认最多�
 等待期间更新任务步骤，保持续租，轮询暂停请求。重试重新读取已提交的构思、规划和前文；符合创作指纹的已有正文候选通过既有恢复机制重新审核，不重复生成已保存的候选。事务、事实审核与文学审核不变。
 
 最终 HTTP/连接失败也写入调用记录，包括提供商、模型、状态码、错误类型和合法的请求编号；不保存响应正文、认证头或密钥。离线测试隔离真实 .env 和提供商环境变量，避免切换提供商后测试意外访问付费端点。
+
+## 结构化传输与诊断（0.6.2）
+
+原生 `output_config` 被部分中转忽略时，HTTP 200 也可能返回 Markdown。默认工具参数模式避免把普通说明文当 JSON 解析；JSON 模式额外在提示中提供完整 Schema。完整的 JSON 外层代码围栏可以确定性移除，但不会从散文中截取片段、推测缺失字段或修复截断内容。
+
+调用记录增加请求模式、Schema 名称、输入字符数、输出上限及字段错误路径；不记录请求认证信息。最终结构化校验失败时，原始方案单独保存在本书运行记录的 `structured_candidate` 中，便于检查，不写入设定、正文或事实记忆。网页可查看调用诊断和失败方案。

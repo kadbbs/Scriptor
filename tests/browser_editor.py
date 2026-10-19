@@ -41,6 +41,21 @@ def main():
             original,
             review(original),
         ]
+        model.hook = lambda: model.calls.append(
+            {
+                "provider": "anthropic",
+                "model": "test-claude-diagnostics",
+                "status": "end_turn",
+                "usage": {"total_tokens": 30},
+                "request": {
+                    "schema": "CreativeBlueprint",
+                    "native_schema": True,
+                    "max_output_tokens": 12000,
+                    "input_chars": 5000,
+                    "system_chars": 159,
+                },
+            }
+        )
         app = create_app(Settings(database=Path(tmp) / "test.db"), lambda: model)
         server = uvicorn.Server(uvicorn.Config(app, log_level="error"))
         sock = socket.socket()
@@ -106,6 +121,8 @@ def main():
                 expect(page.locator("#memory-content")).to_contain_text(replacement)
                 page.get_by_role("button", name="运行记录", exact=True).click()
                 expect(page.locator("#runs-content article")).to_have_count(5)
+                expect(page.locator("#runs-content")).to_contain_text("模型调用诊断")
+                expect(page.locator("#runs-content")).to_contain_text("test-claude-diagnostics")
                 expect(page.locator("#runs-content")).to_contain_text("本章因果与回报")
                 page.locator("#advance").click()
                 expect(page.locator("#stage-progress")).to_contain_text("确认笔迹")

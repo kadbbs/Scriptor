@@ -104,6 +104,11 @@ class StoryService:
                 if isinstance(exc, ReviewRejected)
                 else "other"
             )
+            if isinstance(exc, StructuredOutputError) and exc.raw_output is not None:
+                artifacts["structured_candidate"] = {
+                    "schema": exc.schema_name,
+                    "content": exc.raw_output,
+                }
             self.repo.fail(run_id, message, artifacts, calls[offset:])
             if isinstance(exc, (ScriptorError, KeyboardInterrupt, SystemExit)):
                 raise

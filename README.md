@@ -39,6 +39,7 @@ SCRIPTOR_PROVIDER=anthropic
 ANTHROPIC_API_KEY=你的密钥
 ANTHROPIC_BASE_URL=https://api.anthropic.com
 ANTHROPIC_MODEL=你有权限使用的Claude模型ID
+ANTHROPIC_STRUCTURED_MODE=tool
 ```
 
 重启服务后，网页、CLI、自动运行和构思／写作／审核全部使用选中的提供商。两组密钥与模型配置独立，切换不会读取另一组配置；已有作品和数据库继续共用。
@@ -49,6 +50,7 @@ ANTHROPIC_MODEL=你有权限使用的Claude模型ID
 | --- | --- | --- |
 | `SCRIPTOR_PROVIDER` | `openai` | `openai` 或 `anthropic`，不自动切换 |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | 空 | Anthropic 模式下生成时必填 |
+| `ANTHROPIC_STRUCTURED_MODE` | `tool` | `tool` 指定工具参数；`json_schema` 原生 JSON 输出；`json` 提示词 JSON |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | SDK 根地址，不追加 `/v1/messages`；可配置 Messages 兼容服务 |
 | `OPENAI_API_KEY` | 空 | 生成时必填；保存点子和读取作品不需要 |
 | `OPENAI_MODEL` | 空 | 显式选择可用模型，不绑定厂商 |
@@ -58,12 +60,12 @@ ANTHROPIC_MODEL=你有权限使用的Claude模型ID
 | `SCRIPTOR_AUTO_RETRIES` | `2` | 后台遇到网络故障、429、5xx 时额外重试当前推进步骤的次数，0–5；设为 0 可关闭 |
 | `SCRIPTOR_RETRY_DELAY` | `5` | 后台重试的起始等待秒数，按指数增加，每次最多 60 秒；等待期间可暂停 |
 | `SCRIPTOR_MAX_OUTPUT_TOKENS` | `12000` | 单次输出 token 上限 |
-| `SCRIPTOR_STRUCTURED_OUTPUT` | `true` | 严格 JSON Schema；设为 `false` 时在选中的 API 上请求 JSON 文本并本地校验 |
+| `SCRIPTOR_STRUCTURED_OUTPUT` | `true` | 启用选定的结构化模式；设为 `false` 时使用 JSON 文本并本地校验 |
 | `SCRIPTOR_CONTEXT_CHARS` | `28000` | 上下文字符预算，不是 token 数；审核包含完整正文 |
 
-OpenAI 模式要求服务实现 `POST /responses`；Anthropic 模式要求实现 `POST /v1/messages`。默认使用原生 JSON Schema 输出，Anthropic 通过官方 SDK 转换不支持的 Schema 约束，再按完整 Pydantic 合约本地验证。若兼容端点不支持原生结构化输出，可显式设置 `SCRIPTOR_STRUCTURED_OUTPUT=false`。不会自动回退 API 或更换提供商。
+OpenAI 模式要求服务实现 `POST /responses`；Anthropic 模式要求实现 `POST /v1/messages`。OpenAI 默认使用原生 JSON Schema；Anthropic 默认通过 `tools` / `tool_choice` 指定 `submit_result` 返回结构化参数，该工具只提交数据，不执行外部操作。两种适配器都执行完整 Pydantic 校验。Anthropic 可显式选择 `ANTHROPIC_STRUCTURED_MODE=json_schema` 或 `json`；`SCRIPTOR_STRUCTURED_OUTPUT=false` 保留为强制 JSON 文本模式的兼容开关。不会自动回退 API 或更换提供商。
 
-Anthropic 接入依据[官方结构化输出文档](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)。截断、拒绝、工具调用和未完成响应不会采纳为正文；调用记录保留提供商、模型及 token 用量。
+Anthropic 接入依据[官方结构化输出文档](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)。截断、拒绝和未完成响应不会采纳为正文；指定工具的参数仅供结构化方案与审核使用，正文仍使用普通文本；调用记录保留提供商、模型及 token 用量。
 
 ## 网页使用
 
@@ -198,6 +200,8 @@ uv run --extra dev --with playwright python -m tests.browser_editor
 0.6.0 在 Python 3.10、3.12 各通过 81 项离线测试及 Chromium 烟测。Anthropic 使用真实 SDK 和模拟 HTTP 响应验证了协议、错误处理、Schema 与完整写章流程；本机未配置 Anthropic 凭据，尚未验证真实 Claude 端点。
 
 0.4.1 还在隔离数据库副本上使用本机配置的真实模型，重新审核失败候选并连续自动新增 2 章；该目标作品的 25 条事实与验收引用均通过原文校验。复现原因、修复流程及验证边界见 [自动运行修复验证](docs/validation.md)。
+
+Anthropic 中转未落实 JSON Schema、模型渠道差异与真实流程验证见 [Anthropic 兼容性排查](docs/anthropic-compatibility.md)。
 
 503、连接失败与后台等待重试的排查方式见 [接口故障排查](docs/provider-troubleshooting.md)。
 

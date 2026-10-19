@@ -37,6 +37,11 @@ class EvidenceError(ReviewRejected):
 class StructuredOutputError(ModelError):
     """A completed model response did not satisfy its output contract."""
 
+    def __init__(self, message, *, raw_output=None, schema_name=None):
+        super().__init__(message)
+        self.raw_output = raw_output
+        self.schema_name = schema_name
+
 
 class LiteraryError(ReviewRejected):
     """The prose needs a substantive narrative revision, not another evidence audit."""
