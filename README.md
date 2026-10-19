@@ -1,223 +1,132 @@
-# 📖 Novel Agent
+# Scriptor
 
-<div align="center">
+从头实现的中文长篇小说工作流：**作品设定 → 章节与场景规划 → 正文 → 全文审核 → 剧情记忆 → 阶段验收**。
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
-![OpenAI](https://img.shields.io/badge/OpenAI-Compatible-brightgreen.svg)
-![Status](https://img.shields.io/badge/Status-Active-success.svg)
+所有模型请求使用 **Responses API**。提供 CLI 和本地 HTTP API，共用同一业务核心；SQLite 保存正文版本、原文证据和运行记录。
 
-**基于阿里云百炼的长篇小说自动化写作系统**
+本分支只从旧分支提取设计思想，未复用旧业务代码。外部方案比较见 [调研与取舍](docs/research.md)，一致性规则及边界见 [架构说明](docs/architecture.md)。
 
-✨ 开书初始化 · 章节生成 · 持久化存储 · 状态管理 ✨
+## 安装与配置
 
-</div>
+Python 3.10+：
 
----
-
-## 📋 目录
-
-- [特性](#-特性)
-- [快速开始](#-快速开始)
-- [使用说明](#-使用说明)
-- [项目结构](#-项目结构)
-- [配置说明](#配置说明)
-- [命令行工具](#命令行工具)
-- [常见问题](#-常见问题)
-- [许可证](#-许可证)
-
----
-
-## 🎯 特性
-
-| 特性 | 描述 |
-|:---:|---|
-| 🚀 开书初始化 | 自动生成世界设定、时间线、角色、章节大纲 |
-| 📝 章节生成 | 基于大纲和设定，自动生成连贯的章节内容 |
-| 💾 持久化存储 | 每章独立文件夹，包含正文、元数据、摘要 |
-| 🔄 状态管理 | 追踪剧情进度、角色状态、伏笔回收 |
-| 📚 多书管理 | 支持同时管理多本小说 |
-| 🛠️ 命令行工具 | 简洁的 CLI 接口，易于集成和自动化 |
-
----
-
-## 🚀 快速开始
-
-### 1️⃣ 克隆项目
-
-```
-git clone https://github.com/your-username/novel-agent.git
-cd novel-agent
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+cp .env.example .env
 ```
 
-### 2️⃣ 创建虚拟环境
+在 `.env` 中填写：
 
-```python -m venv myenv
-source myenv/bin/activate
+```dotenv
+OPENAI_API_KEY=你的密钥
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=你有权限使用且支持Responses的模型
 ```
 
-### 3️⃣ 安装依赖
+仓库附有 `uv.lock`。如使用 uv，可用 `uv sync --locked --extra dev` 安装锁定依赖；CI 使用同一锁文件。
 
-```
-pip install -r requirements.txt
-```
-### 4️⃣ 配置 API 密钥
+`OPENAI_BASE_URL` 是 API 根路径，不要追加 `/responses`。第三方服务必须支持 `POST /responses`；仅有 OpenAI Chat Completions 兼容接口不足以运行本项目。不会静默改用其他 API。
 
-```
-export DASHSCOPE_API_KEY="sk-xxxxxxxxxxxxxxxx"
-```
-### 5️⃣ 运行程序
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | 空 | 生成时必填；本地新建、查询、导出不需要 |
+| `OPENAI_MODEL` | 空 | 显式选择模型，不绑定厂商 |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Responses 服务根地址 |
+| `SCRIPTOR_DB` | `data/scriptor.db` | 新版数据库，与旧文件布局分开 |
+| `SCRIPTOR_TIMEOUT` | `180` | 单次请求超时秒数，SDK 最多重试两次 |
+| `SCRIPTOR_MAX_OUTPUT_TOKENS` | `12000` | 单次模型输出 token 上限 |
+| `SCRIPTOR_STRUCTURED_OUTPUT` | `true` | 服务端严格 JSON Schema；显式设为 `false` 时仍用 Responses，但只本地校验 JSON |
+| `SCRIPTOR_CONTEXT_CHARS` | `28000` | 上下文字符预算，审核为完整正文预留空间；不是 token 数 |
 
-```
-python main.py init
-```
----
+环境变量优先于 `.env`。示例不含有效密钥，数据库、虚拟环境和 `.env` 不进入 Git。
 
-## 📖 使用说明
+## 命令行工作流
 
-### 创建新书
+```bash
+# 编辑示例，填写点子、题材、风格和阶段验收标准
+scriptor create --input examples/book.json
+scriptor list
 
-```
-python main.py init
-```
-### 撰写章节
+# 将 BOOK_ID 替换成 create 返回的 id
+scriptor bible BOOK_ID
+scriptor plan BOOK_ID --start 1 --count 5
+scriptor write BOOK_ID 1
+scriptor show BOOK_ID
+scriptor write BOOK_ID 2
 
-写单章：
-```
-python main.py write book_20260219_140248 1
-```
-批量写第 1-10 章：
-```
-for i in {1..10}; do python main.py write book_20260219_140248 $i; done
-```
-### 查看进度
+# 最新一章可以显式重写，旧版本保留
+scriptor write BOOK_ID 2 --rewrite
+scriptor history BOOK_ID 2
 
-列出所有书籍：
-```
-python main.py list
-```
-查看某书章节列表：
-```
-python main.py chapters book_20260219_140248
-```
-阅读指定章节：
-```
-python main.py read book_20260219_140248 1
+# 或提交手写/修订正文，仍经过全文审核
+scriptor edit BOOK_ID 2 --file chapter-2.txt
+
+# 当前阶段验收全部达成后，由作者确认下一阶段
+scriptor advance BOOK_ID --input examples/next-stage.json --confirm
+scriptor plan BOOK_ID --start 3 --count 5
+
+# 查看调用、失败候选和审核信息，导出采纳后的正文
+scriptor runs BOOK_ID
+scriptor export BOOK_ID --output novel.md
 ```
 
----
+也可使用 `python -m scriptor`。命令输出 UTF-8 JSON；失败返回非零退出码。批量写作可通过脚本循环，但每章失败应停止并检查原因。
 
-### 拓展大纲和时间线
+生成大纲每批 1–20 章，可从任一未写章节开始替换后续规划；不会重复追加同编号章节。正文按顺序写，仅支持编辑当前阶段最新一章，避免历史改动污染后文。重写后字数和记忆按当前版本计算，并清除依赖旧正文的后续规划，需要重新运行 `plan`。
 
-生成 30 个新时间线事件:  
+阶段验收依据正文实际发生的事，而非大纲中的预告。每条事实与达成判定需要本章原文引用；阶段达成需要各验收项都有置信度至少 0.8 的证据，切换阶段还需显式确认。阶段数量不设固定上限。
+
+如果审核失败、模型输出中断或并发期间书籍发生变化，原正文不变。`runs` 保存普通失败时已生成的候选与审核结果。取出候选并修改后，可用 `scriptor write BOOK_ID N --file candidate.txt` 提交新章，或增加 `--rewrite` 提交最新一章的替代版本。强制杀进程不保证保存尚在内存中的候选。
+
+## 本地 HTTP API
+
+```bash
+scriptor serve --port 8000
 ```
-python main.py timeline book_20260219_140248 30  
+
+打开 `http://127.0.0.1:8000/docs` 使用交互接口文档。当前没有定制网页编辑器。
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `POST /api/books` | 创建书籍；请求结构同 `examples/book.json` |
+| `GET /api/books` / `GET /api/books/{id}` | 列表 / 完整状态、记忆、阶段证据 |
+| `POST /api/books/{id}/bible` | 生成作品设定 |
+| `POST /api/books/{id}/plans` | `{"start":1,"count":5}` |
+| `POST /api/books/{id}/chapters/{n}/generate` | `{"rewrite":false}`；可传 `content` 提交手写正文 |
+| `PUT /api/books/{id}/chapters/{n}` | `{"content":"修订正文"}`，只允许最新一章 |
+| `GET /api/books/{id}/chapters/{n}/history` | 已采纳历史版本 |
+| `POST /api/books/{id}/stages` | `{"stage":{...},"confirm":true}`，stage 结构同 `next-stage.json` |
+| `GET /api/books/{id}/runs` | 调用记录、候选和审核 |
+| `GET /api/books/{id}/export` | Markdown 正文 |
+
+生成请求同步等待，CLI 与 API 都有明确的完成/失败结果。并发提交由书籍版本检查保护，失败候选可查看。数据库保存创作内容，按本地单用户工具使用。
+
+## 开发与验证
+
+```bash
+ruff check .
+ruff format --check .
+pytest -q
 ```
 
-或者同时生成大纲和时间线:
-```   
-python main.py outlines book_20260219_140248 41 20    
-python main.py timeline book_20260219_140248 30    
+所有测试离线运行，不需要密钥。包括使用真实 OpenAI Python SDK 的 Responses HTTP 协议测试，以及重写、证据校验、事务回滚、并发冲突、HTTP API 与 CLI 测试。尚未用真实端点验证模型质量。
+
+```text
+scriptor/
+  models.py       输入及模型输出契约
+  llm.py          唯一的 Responses 传输适配器
+  prompts.py      设定、规划、正文、审核任务
+  context.py      版本记忆回放、词项检索、字符预算
+  repository.py   SQLite、事务、运行记录和历史
+  service.py      写作流程与阶段状态机
+  cli.py / api.py 两个共用业务核心的入口
+tests/            离线验证
+docs/             调研与架构取舍
+examples/         新书及后续阶段配置
 ```
----
 
-## 📁 项目结构
-```
-novel-agent/
-├── core/                      # 核心模块
-│   ├── __init__.py           # 模块导出
-│   ├── initializer.py        # 开书初始化
-│   ├── state.py              # 状态管理
-│   └── generator.py          # 章节生成
-├── books/                     # 书籍数据（自动创建）
-│   └── book_YYYYMMDD_HHMMSS/
-│       ├── story_state.json  # 故事总状态
-│       ├── configs/          # 配置文件
-│       │   ├── world.json    # 世界设定
-│       │   ├── timeline.json # 时间线
-│       │   └── outlines.json # 章节大纲
-│       ├── chapters/         # 章节文件
-│       │   ├── chapter_index.json
-│       │   ├── chapter_001/
-│       │   │   ├── chapter.txt
-│       │   │   └── metadata.json
-│       │   └── ...
-│       └── summaries/        # 章节摘要
-│           └── chapter_001_summary.json
-├── .gitignore                # Git 忽略规则
-├── requirements.txt          # Python 依赖
-├── main.py                   # 主入口
-└── README.md                 # 项目说明
-```
----
+当前不自动导入旧书，不支持任意历史章修改、流式续写或向量检索。原文引用存在不代表模型的语义判断一定正确，审核和置信度不能代替作者判断；小说质量仍需实际作品评测。
 
-## ⚙️ 配置说明 <a id="配置说明"></a>
-
-### 环境变量
-
-| 变量名 | 说明 | 默认值 |
-|:---|:---|:---|
-| DASHSCOPE_API_KEY | 阿里云百炼 API 密钥 | 必填 |
-| DASHSCOPE_BASE_URL | API 基础 URL | https://dashscope.aliyuncs.com/compatible-mode/v1 |
-
-### 获取 API 密钥
-
-1. 访问 https://bailian.console.aliyun.com/
-2. 登录/注册阿里云账号
-3. 进入 API-KEY 管理页面
-4. 创建新的 API 密钥并复制
-
----
-
-## 🛠️  命令行工具<a id="命令行工具"></a>
-
-| 命令 | 说明 | 示例 |
-|:---|:---|:---|
-| init | 创建新书 | python main.py init |
-| write | 撰写章节 | python main.py write <book_id> <chapter> |
-| list | 列出书籍 | python main.py list |
-| chapters | 查看章节列表 | python main.py chapters <book_id> |
-| read | 阅读章节 | python main.py read <book_id> <chapter> |
-| timeline | 增加时间线 | python main.py timeline <book_id> <chapter> |
-| outlines | 增加大纲 | python main.py outlines <book_id> <chapter> |
-
----
-
-## ❓ 常见问题
-
-**Q: API 请求超时/卡住？**
-
-A: 检查以下几点：
-1. 确认 API 密钥正确：echo $DASHSCOPE_API_KEY
-2. 检查网络连接
-3. 确认账户有余额
-4. 尝试更换模型：修改 core/initializer.py 中的 self.model
-
-**Q: 如何修改生成参数？**
-
-A: 编辑 core/generator.py 中的提示词模板，调整：
-- temperature: 创造性 (0.5-0.9)
-- max_tokens: 最大输出长度
-- word_count_target: 目标字数
-
-**Q: 书籍数据能同步到 Git 吗？**
-
-A: 默认 books/ 目录被 .gitignore 忽略。如需备份，建议：
-1. 手动复制 books/ 到云存储
-2. 或注释 .gitignore 中的 books/ 行（不推荐公开仓库）
-
----
-
-## 📄 许可证
-
-本项目采用 MIT 许可证。
-
----
-
-<div align="center">
-
-**Made with ❤️ by Novel Agent Team**
-
-[⭐ Star](https://github.com/your-username/novel-agent) · [🐛 Issues](https://github.com/your-username/novel-agent/issues) · [📬 Contact](mailto:your-email@example.com)
-
-</div>
+MIT License，见 [LICENSE](LICENSE)。
